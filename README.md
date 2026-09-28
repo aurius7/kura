@@ -15,6 +15,16 @@ at rest with AES-256-GCM using Android Keystore-managed keys, and the app
 declares no `INTERNET` permission, so it cannot open a network connection even
 if it wanted to.
 
+> **Never uninstall Kura to upgrade or reinstall it.** The vault key lives in
+> the Android Keystore and is destroyed with the app, so removing Kura destroys
+> the vault and its contents permanently — there is no backup that can help,
+> because the key is gone. To upgrade, install the new APK over the top. A
+> missing launcher icon or an app that will not open is a bug worth reporting,
+> never a reason to uninstall. See [SECURITY.md](SECURITY.md).
+
+Found a vulnerability? See [SECURITY.md](SECURITY.md) for how to report one
+privately, and for what does not count as one.
+
 ## Features
 
 **Encryption and hardening**
