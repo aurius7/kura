@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude path="vault/" domain="file" />
+        <exclude path="vault_decoy/" domain="file" />
+        <exclude path="play/" domain="file" />
+        <exclude path="play/" domain="root" />
+        <exclude path="play_decoy/" domain="file" />
+        <exclude path="play_decoy/" domain="root" />
+        <exclude path="external/" domain="file" />
+        <exclude path="crash.txt" domain="file" />
+        <exclude path="vault.db" domain="database" />
+        <exclude path="vault.db-wal" domain="database" />
+        <exclude path="vault.db-shm" domain="database" />
+        <exclude path="vault_decoy.db" domain="database" />
+        <exclude path="vault_decoy.db-wal" domain="database" />
+        <exclude path="vault_decoy.db-shm" domain="database" />
+        <exclude path="kura_secure_prefs.xml" domain="sharedpref" />
+        <exclude path="kura_secure_prefs_fallback.xml" domain="sharedpref" />
+        <exclude path="kura_ui.xml" domain="sharedpref" />
+        <exclude path="vbooru_secure_prefs.xml" domain="sharedpref" />
+        <exclude path="vbooru_ui.xml" domain="sharedpref" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude path="vault/" domain="file" />
+        <exclude path="vault_decoy/" domain="file" />
+        <exclude path="play/" domain="file" />
+        <exclude path="play/" domain="root" />
+        <exclude path="play_decoy/" domain="file" />
+        <exclude path="play_decoy/" domain="root" />
+        <exclude path="external/" domain="file" />
+        <exclude path="crash.txt" domain="file" />
+        <exclude path="vault.db" domain="database" />
+        <exclude path="vault.db-wal" domain="database" />
+        <exclude path="vault.db-shm" domain="database" />
+        <exclude path="vault_decoy.db" domain="database" />
+        <exclude path="vault_decoy.db-wal" domain="database" />
+        <exclude path="vault_decoy.db-shm" domain="database" />
+        <exclude path="kura_secure_prefs.xml" domain="sharedpref" />
+        <exclude path="kura_secure_prefs_fallback.xml" domain="sharedpref" />
+        <exclude path="kura_ui.xml" domain="sharedpref" />
+        <exclude path="vbooru_secure_prefs.xml" domain="sharedpref" />
+        <exclude path="vbooru_ui.xml" domain="sharedpref" />
+    </device-transfer>
+</data-extraction-rules>

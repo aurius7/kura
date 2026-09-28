@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <exclude domain="file" path="vault/" />
+    <exclude domain="file" path="vault_decoy/" />
+    <exclude domain="file" path="play/" />
+    <exclude domain="file" path="play_decoy/" />
+    <exclude domain="file" path="external/" />
+    <exclude domain="file" path="crash.txt" />
+    <exclude domain="root" path="play/" />
+    <exclude domain="root" path="play_decoy/" />
+    <exclude domain="database" path="vault.db" />
+    <exclude domain="database" path="vault.db-wal" />
+    <exclude domain="database" path="vault.db-shm" />
+    <exclude domain="database" path="vault_decoy.db" />
+    <exclude domain="database" path="vault_decoy.db-wal" />
+    <exclude domain="database" path="vault_decoy.db-shm" />
+    <exclude domain="sharedpref" path="kura_secure_prefs.xml" />
+    <exclude domain="sharedpref" path="kura_secure_prefs_fallback.xml" />
+    <exclude domain="sharedpref" path="kura_ui.xml" />
+    <exclude domain="sharedpref" path="vbooru_secure_prefs.xml" />
+    <exclude domain="sharedpref" path="vbooru_ui.xml" />
+</full-backup-content>

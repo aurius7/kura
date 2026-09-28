@@ -1,0 +1,222 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Core permission: biometric unlock -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <uses-feature android:name="android.hardware.fingerprint" android:required="false" />
+
+    <application
+        android:label="Kura"
+        android:icon="@drawable/ic_launcher"
+        android:roundIcon="@drawable/ic_launcher_round"
+        android:allowBackup="false"
+        android:fullBackupOnly="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:usesCleartextTraffic="false"
+        android:theme="@style/Theme.Kura"
+        android:hardwareAccelerated="true"
+        android:supportsRtl="true">
+
+        <activity
+            android:name=".LockActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="video/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="video/*" />
+            </intent-filter>
+        </activity>
+
+        <activity-alias
+            android:name=".IconKura"
+            android:targetActivity=".LockActivity"
+            android:exported="true"
+            android:enabled="true"
+            android:icon="@drawable/ic_icon_kura"
+            android:roundIcon="@drawable/ic_icon_kura_round">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".IconBust"
+            android:targetActivity=".LockActivity"
+            android:exported="true"
+            android:enabled="false"
+            android:icon="@drawable/ic_icon_bust"
+            android:roundIcon="@drawable/ic_icon_bust_round">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".IconCurves"
+            android:targetActivity=".LockActivity"
+            android:exported="true"
+            android:enabled="false"
+            android:icon="@drawable/ic_icon_curves"
+            android:roundIcon="@drawable/ic_icon_curves_round">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".IconContour"
+            android:targetActivity=".LockActivity"
+            android:exported="true"
+            android:enabled="false"
+            android:icon="@drawable/ic_icon_contour"
+            android:roundIcon="@drawable/ic_icon_contour_round">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".IconSwimwear"
+            android:targetActivity=".LockActivity"
+            android:exported="true"
+            android:enabled="false"
+            android:icon="@drawable/ic_icon_swimwear"
+            android:roundIcon="@drawable/ic_icon_swimwear_round">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".IconHourglass"
+            android:targetActivity=".LockActivity"
+            android:exported="true"
+            android:enabled="false"
+            android:icon="@drawable/ic_icon_hourglass"
+            android:roundIcon="@drawable/ic_icon_hourglass_round">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".IconDiscreet"
+            android:targetActivity=".LockActivity"
+            android:exported="true"
+            android:enabled="false"
+            android:icon="@drawable/ic_icon_discreet"
+            android:roundIcon="@drawable/ic_icon_discreet_round">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".IconSakura"
+            android:targetActivity=".LockActivity"
+            android:exported="true"
+            android:enabled="false"
+            android:icon="@drawable/ic_icon_sakura"
+            android:roundIcon="@drawable/ic_icon_sakura_round">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".IconKitsune"
+            android:targetActivity=".LockActivity"
+            android:exported="true"
+            android:enabled="false"
+            android:icon="@drawable/ic_icon_kitsune"
+            android:roundIcon="@drawable/ic_icon_kitsune_round">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".IconKatana"
+            android:targetActivity=".LockActivity"
+            android:exported="true"
+            android:enabled="false"
+            android:icon="@drawable/ic_icon_katana"
+            android:roundIcon="@drawable/ic_icon_katana_round">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".IconCrescent"
+            android:targetActivity=".LockActivity"
+            android:exported="true"
+            android:enabled="false"
+            android:icon="@drawable/ic_icon_crescent"
+            android:roundIcon="@drawable/ic_icon_crescent_round">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:windowSoftInputMode="adjustPan|stateHidden" />
+        <activity
+            android:name=".CrashActivity"
+            android:exported="false"
+            android:process=":crash" />
+        <activity
+            android:name=".DetailActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout"
+            android:windowSoftInputMode="adjustResize|stateHidden" />
+        <activity
+            android:name=".SettingsActivity"
+            android:exported="false" />
+
+        <!-- Strip AndroidX ProfileInstallReceiver so android.permission.DUMP is completely eliminated -->
+        <receiver
+            android:name="androidx.profileinstaller.ProfileInstallReceiver"
+            tools:node="remove" />
+
+        <!--
+            Re-enables the launcher icon after an update. Icon selection lives in
+            persisted component state, so a build that renames an activity-alias can
+            otherwise leave the app installed with nothing launchable, which no
+            in-app code could recover from. See PackageReplacedReceiver.
+        -->
+        <receiver
+            android:name=".PackageReplacedReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>
