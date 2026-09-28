@@ -40,6 +40,7 @@ class Prefs(ctx: Context) {
     }
 
     private val secure: SharedPreferences by lazy {
+        val secState = app.getSharedPreferences("kura_secstate", Context.MODE_PRIVATE)
         try {
             val ks = try {
                 val k = java.security.KeyStore.getInstance("AndroidKeyStore")
@@ -54,20 +55,28 @@ class Prefs(ctx: Context) {
             val prefName = if (alias == "vbooru_master") "vbooru_secure_prefs" else "kura_secure_prefs"
             val mk = MasterKey.Builder(app, alias)
                 .setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
-            EncryptedSharedPreferences.create(
+            val sp = EncryptedSharedPreferences.create(
                 app, prefName, mk,
                 EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
             )
+            secState.edit().putBoolean("keystore_degraded", false).apply()
+            sp
         } catch (_: Exception) {
             // Keystore unavailable (corrupted keyset, or a device where it never
             // enrolled). Falling back silently would store the PIN hash in the
             // clear, so record it and tell the user rather than degrade quietly.
             secureFallbackActive = true
+            secState.edit().putBoolean("keystore_degraded", true).apply()
             Log.e("kura/Prefs", "Keystore unavailable; secure prefs degraded to plaintext", Throwable())
             app.getSharedPreferences("kura_secure_prefs_fallback", Context.MODE_PRIVATE)
         }
     }
+
+    /** Current degraded state, persisted so PIN changes stay blocked all session. */
+    private fun secureDegraded(): Boolean =
+        app.getSharedPreferences("kura_secstate", Context.MODE_PRIVATE)
+            .getBoolean("keystore_degraded", false)
 
     /** True when encrypted prefs could not be opened, so settings are stored in the clear. */
     @Volatile
@@ -522,7 +531,16 @@ class Prefs(ctx: Context) {
 
     /** Change Real PIN dialog used from Settings. Requires current PIN if set. */
     fun setPinPrompt(ctx: Context, done: () -> Unit) {
-        if (hasPin()) {
+        // hasPin() forces the keystore-backed store open, refreshing the degraded
+        // marker before we block anything. First-time PIN setup (no PIN yet) is
+        // still allowed so a degraded device is not bricked; changing an existing
+        // PIN is blocked because the new hash would be stored in the clear.
+        val pinExists = hasPin()
+        if (pinExists && secureDegraded()) {
+            showPinChangeBlocked(ctx)
+            return
+        }
+        if (pinExists) {
             verifyCurrentPinPrompt(ctx, "Verify Current PIN", "Enter your current PIN before setting a new one:") {
                 showNewPinDialog(ctx, done)
             }
@@ -575,6 +593,13 @@ class Prefs(ctx: Context) {
 
     /** Set or change Decoy PIN dialog used from Settings. Requires Vault PIN if set. */
     fun setDecoyPinPrompt(ctx: Context, done: () -> Unit) {
+        // A decoy PIN is a secondary credential whose hash would be stored
+        // unencrypted while degraded, so block both setup and change.
+        hasPin()
+        if (secureDegraded()) {
+            showPinChangeBlocked(ctx)
+            return
+        }
         if (hasPin()) {
             verifyCurrentPinPrompt(ctx, "Authorize Decoy PIN", "Enter master vault PIN to configure decoy:") {
                 showNewDecoyPinDialog(ctx, done)
@@ -582,6 +607,22 @@ class Prefs(ctx: Context) {
         } else {
             showNewDecoyPinDialog(ctx, done)
         }
+    }
+
+    /** Shown instead of PIN setup while the keystore is degraded and would store the new hash in the clear. */
+    private fun showPinChangeBlocked(ctx: Context) {
+        AlertDialog.Builder(ctx)
+            .setTitle("PIN changes disabled")
+            .setMessage(
+                "The hardware keystore could not be opened, so your PIN hash is currently " +
+                    "stored unencrypted.\n\n" +
+                    "Changing your PIN now would only create another unencrypted hash, so PIN " +
+                    "changes are blocked until the keystore is fixed.\n\n" +
+                    "Re-enroll your screen lock, then reinstall the app, to restore encrypted storage."
+            )
+            .setPositiveButton("OK", null)
+            .setCancelable(false)
+            .show()
     }
 
     private fun showNewDecoyPinDialog(ctx: Context, done: () -> Unit) {

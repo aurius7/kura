@@ -1469,7 +1469,7 @@ class DetailActivity : BaseVaultActivity() {
                     if (isTornDown || isFinishing || isDestroyed || activePlaySessionId != currentJobId || VaultLock.sessionId != startVaultSession) {
                         return@execute
                     }
-                    val f = vault.decryptToPlayCache(it.fileName)
+                    val f = vault.decryptVideoForPlaybackToCache(it.fileName)
                     if (isTornDown || isFinishing || isDestroyed || activePlaySessionId != currentJobId || VaultLock.sessionId != startVaultSession) {
                         vault.secureShred(f)
                         return@execute

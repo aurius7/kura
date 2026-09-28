@@ -1183,25 +1183,9 @@ class SettingsActivity : BaseVaultActivity() {
         vault = CryptoVault(this)
         db = BooruDb(this)
         // Touching secure prefs is what actually opens (or fails to open) the
-        // keystore-backed store, so force it before checking for a fallback.
+        // keystore-backed store. The degraded-keystore warning is shown on the
+        // lock screen before the vault ever opens, so it is not repeated here.
         prefs.hasPin()
-        if (prefs.consumeSecureFallbackWarning()) {
-            showBlackDialog(
-                title = "Keystore unavailable",
-                subtitle = "Security settings are stored unencrypted",
-                positiveBtnText = "OK",
-                onPositive = {},
-                negativeBtnText = null
-            ) { container, _ ->
-                dialogBodyText(
-                    container,
-                    "The hardware keystore could not be opened, so security settings " +
-                        "(including your PIN hash) are being stored unencrypted.\n\n" +
-                        "Re-enrolling your screen lock, then reinstalling the app, restores " +
-                        "encrypted storage."
-                )
-            }
-        }
         build()
     }
 

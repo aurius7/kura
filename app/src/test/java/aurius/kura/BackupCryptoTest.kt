@@ -192,6 +192,51 @@ class BackupCryptoTest {
         assertArrayEquals(originalData, plainOut.toByteArray())
     }
 
+    @Test
+    fun testNewArchiveHeaderCarriesKdfIterations() {
+        val plainIn = ByteArrayInputStream("HeaderKdfPayload".repeat(100).toByteArray(Charsets.UTF_8))
+        val cipherOut = ByteArrayOutputStream()
+        BackupCrypto.encryptStream(plainIn, cipherOut, "HeaderKdfPassword".toCharArray())
+        val bytes = cipherOut.toByteArray()
+
+        val head = String(bytes, 0, 32, Charsets.US_ASCII)
+        assertTrue("new archive must be KURA_ENC_03 with a header-tagged KDF count",
+            head.startsWith("KURA_ENC_03\n120000\n"))
+    }
+
+    @Test
+    fun testLegacyKura02ArchiveAt100kIterationsStillOpens() {
+        val originalData = "LegacyKura02Payload_xyz".toByteArray(Charsets.UTF_8)
+        val password = "LegacyKura02Password".toCharArray()
+
+        val cipherOut = ByteArrayOutputStream()
+        cipherOut.write(BackupCrypto.MAGIC_KURA_02)
+
+        val salt = ByteArray(16) { 0x51.toByte() }
+        cipherOut.write(salt)
+
+        val factory = javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
+        val spec = javax.crypto.spec.PBEKeySpec(password, salt, 100_000, 256)
+        val key = javax.crypto.spec.SecretKeySpec(factory.generateSecret(spec).encoded, "AES")
+
+        val iv = ByteArray(12) { 0x09.toByte() }
+        val cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(javax.crypto.Cipher.ENCRYPT_MODE, key, javax.crypto.spec.GCMParameterSpec(128, iv))
+        cipher.updateAAD(java.nio.ByteBuffer.allocate(8).putLong(0).array())
+        val cipherBytes = cipher.doFinal(originalData)
+
+        val dos = java.io.DataOutputStream(cipherOut)
+        dos.writeInt(cipherBytes.size)
+        dos.write(iv)
+        dos.write(cipherBytes)
+        dos.writeInt(0) // EOF
+        dos.flush()
+
+        val plainOut = ByteArrayOutputStream()
+        BackupCrypto.decryptStream(ByteArrayInputStream(cipherOut.toByteArray()), plainOut, password)
+        assertArrayEquals(originalData, plainOut.toByteArray())
+    }
+
     /**
      * A truncated archive must never decrypt silently. The chunked stream is
      * terminated by a trailing zero-length chunk marker, so cutting the archive
@@ -262,8 +307,10 @@ class BackupCryptoTest {
         BackupCrypto.encryptStream(ByteArrayInputStream(originalData), cipherOut, password)
         val cipherBytes = cipherOut.toByteArray()
 
-        // magic (12) + salt (16) + chunk length (4) + iv (12) = 44.
-        val pos = 12 + 16 + 4 + 12 + 32
+        // magic "KURA_ENC_03\n" (12) + iterations "120000\n" (7) + salt (16)
+        // + chunk length (4) + iv (12) = 51, then flip a byte inside the first
+        // chunk's ciphertext.
+        val pos = 12 + 7 + 16 + 4 + 12 + 32
         assertTrue("chunk ciphertext offset in range", pos < cipherBytes.size)
         val tampered = cipherBytes.copyOf()
         tampered[pos] = (tampered[pos].toInt() xor 0x01).toByte()

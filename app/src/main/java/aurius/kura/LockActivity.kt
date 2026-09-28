@@ -504,6 +504,14 @@ class LockActivity : AppCompatActivity() {
     }
 
     private fun open(decoy: Boolean) {
+        if (!decoy && prefs.consumeSecureFallbackWarning()) {
+            KeystoreFallbackDialog.show(this, prefs) { launchVault(decoy) }
+            return
+        }
+        launchVault(decoy)
+    }
+
+    private fun launchVault(decoy: Boolean) {
         VaultLock.unlock(decoy)
         BaseVaultActivity.wipePlayCacheAsync(this)
         val launchIntent = Intent(this, MainActivity::class.java).apply {

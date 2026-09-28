@@ -12,18 +12,25 @@ import javax.crypto.spec.SecretKeySpec
 
 /**
  * Streaming password-authenticated encryption for portable `.kura` backups.
- * Uses PBKDF2-HMAC-SHA256 (100,000 iterations) with a 16-byte random salt,
+ * Uses PBKDF2-HMAC-SHA256 (120,000 iterations) with a 16-byte random salt,
  * and chunked 64KB AES-256-GCM with sequential AAD chunk counters.
+ *
+ * The iteration count is written into the archive header, so the cost can be
+ * raised over time without locking old backups out: `KURA_ENC_03` archives
+ * carry their own KDF iteration count, while legacy `KURA_ENC_01/02` and
+ * `VBOORU_ENC_01` archives are read with the 100,000 it took to create them.
  *
  * Wrong passwords trigger [javax.crypto.AEADBadTagException] on chunk 0 in milliseconds.
  * Memory overhead is strictly bounded to 64KB regardless of backup size.
  */
 object BackupCrypto {
+    val MAGIC_KURA_03 = "KURA_ENC_03\n".toByteArray(Charsets.US_ASCII)
     val MAGIC_KURA_02 = "KURA_ENC_02\n".toByteArray(Charsets.US_ASCII)
     val MAGIC_KURA_01 = "KURA_ENC_01\n".toByteArray(Charsets.US_ASCII)
     val MAGIC_VBOORU = "VBOORU_ENC_01\n".toByteArray(Charsets.US_ASCII)
-    val MAGIC = MAGIC_KURA_02
-    private const val ITERATIONS = 100_000
+    val MAGIC = MAGIC_KURA_03
+    private const val KDF_ITERATIONS = 120_000
+    private const val LEGACY_KDF_ITERATIONS = 100_000
     private const val CHUNK_SIZE = 64 * 1024 // 64 KB plaintext chunks
 
     fun hasMagic(headerBytes: ByteArray): Boolean {
@@ -32,9 +39,9 @@ object BackupCrypto {
         return s.startsWith("KURA_ENC_") || s.startsWith("KURO_ENC_") || s.startsWith("VBOORU_ENC_")
     }
 
-    private fun deriveKey(passphrase: CharArray, salt: ByteArray): SecretKeySpec {
+    private fun deriveKey(passphrase: CharArray, salt: ByteArray, iterations: Int): SecretKeySpec {
         val factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
-        val spec = PBEKeySpec(passphrase, salt, ITERATIONS, 256)
+        val spec = PBEKeySpec(passphrase, salt, iterations, 256)
         val keyBytes = factory.generateSecret(spec).encoded
         return SecretKeySpec(keyBytes, "AES")
     }
@@ -57,10 +64,11 @@ object BackupCrypto {
 
         init {
             underlying.write(MAGIC)
+            underlying.write("$KDF_ITERATIONS\n".toByteArray(Charsets.US_ASCII))
             val salt = ByteArray(16)
             random.nextBytes(salt)
             underlying.write(salt)
-            key = deriveKey(passphrase, salt)
+            key = deriveKey(passphrase, salt, KDF_ITERATIONS)
         }
 
         override fun write(b: Int) {
@@ -145,6 +153,7 @@ object BackupCrypto {
             }
         }
         val headerStr = headerBos.toString(Charsets.US_ASCII.name()).trim()
+        val isKura03 = headerStr.startsWith("KURA_ENC_03")
         val isKura02 = headerStr.startsWith("KURA_ENC_02")
         val isKura = headerStr.startsWith("KURA_ENC_") || headerStr.startsWith("KURO_ENC_")
         val isVbooru = headerStr.startsWith("VBOORU_ENC_")
@@ -153,10 +162,27 @@ object BackupCrypto {
             throw java.io.IOException("Not a valid encrypted vault archive ($headerStr)")
         }
 
+        // KURA_ENC_03 records the KDF iteration count it was shipped with so the
+        // cost can rise without locking old backups out. Earlier formats predate
+        // that and are always 100,000 iterations.
+        val iterations = if (isKura03) {
+            val itBos = java.io.ByteArrayOutputStream()
+            while (true) {
+                val b = dis.read()
+                if (b == -1 || b == '\n'.code) break
+                if (b != '\r'.code) itBos.write(b)
+            }
+            itBos.toString(Charsets.US_ASCII.name()).trim().toIntOrNull()
+                ?: throw java.io.IOException("Corrupted archive: missing KDF iteration count")
+        } else {
+            LEGACY_KDF_ITERATIONS
+        }
+
         val salt = ByteArray(16)
         dis.readFully(salt)
 
-        val key = deriveKey(passphrase, salt)
+        val key = deriveKey(passphrase, salt, iterations)
+        val usesAadCounter = isKura03 || isKura02
         var chunkIndex = 0L
 
         while (true) {
@@ -174,7 +200,7 @@ object BackupCrypto {
 
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv))
-            if (isKura02) {
+            if (usesAadCounter) {
                 val aad = ByteBuffer.allocate(8).putLong(chunkIndex++).array()
                 cipher.updateAAD(aad)
             }

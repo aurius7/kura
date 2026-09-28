@@ -1749,7 +1749,7 @@ class MainActivity : BaseVaultActivity() {
                     if (isFinishing || isDestroyed || activeReelsJobId != currentJobId || VaultLock.sessionId != startVaultSession) {
                         return@execute
                     }
-                    val f = vault.decryptToPlayCache(item.fileName)
+                    val f = vault.decryptVideoForPlaybackToCache(item.fileName)
                     if (isFinishing || isDestroyed || activeReelsJobId != currentJobId || VaultLock.sessionId != startVaultSession) {
                         vault.secureShred(f)
                         return@execute

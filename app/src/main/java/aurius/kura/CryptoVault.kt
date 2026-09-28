@@ -21,7 +21,7 @@ import java.util.UUID
  *
  * Plaintext reaches disk in four places, all inside the
  * credential-encrypted app-private cache:
- *  - video playback, via [decryptToPlayCache]. This is the largest one.
+ *  - video playback, via [decryptVideoForPlaybackToCache]. This is the largest one.
  *    `VideoView` only accepts a file path or Uri -- it cannot be handed a
  *    MediaDataSource the way `MediaPlayer` can -- so playback necessarily goes
  *    through a decrypted file. It is shredded when playback ends and the play
@@ -115,8 +115,22 @@ class CryptoVault(ctx: Context) {
         }
     }
 
-    /** Decrypt to isolated app-private cache file for playback. Caller must delete when done. */
-    fun decryptToPlayCache(name: String): File {
+    /**
+     * Decrypts [name] to a **plaintext** file in the credential-encrypted cache so
+     * that `VideoView` can play it, and returns that file.
+     *
+     * This is the one unavoidable place where vault plaintext reaches the disk.
+     * It is named and documented this way deliberately, because the alternative
+     * description has repeatedly caused reviewers to wrongly conclude that
+     * playback is RAM-only. It is not: `RamMediaDataSource` serves thumbnails
+     * and metadata probes only, because `VideoView` cannot accept a
+     * MediaDataSource on any API level the app supports.
+     *
+     * The file lives in the app-private cache, is shredded when playback ends,
+     * and the whole play directory is wiped when the vault locks. The caller
+     * must shred the returned file when it is finished with it.
+     */
+    fun decryptVideoForPlaybackToCache(name: String): File {
         val ext = if (name.contains(".")) "." + name.substringAfterLast(".").lowercase() else ".mp4"
         val out = File(playDir, "play_${UUID.randomUUID().toString().take(8)}$ext")
         encFile(name).openFileInput().use { inp ->
