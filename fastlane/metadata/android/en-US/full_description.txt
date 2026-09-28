@@ -1,0 +1,35 @@
+Kura is an offline vault for photos, videos and GIFs. Media is encrypted at rest
+with AES-256-GCM, using keys generated and held by the Android Keystore.
+
+The app declares no INTERNET permission, so it cannot open a network connection
+even if it wanted to. There is no analytics, no advertising, no account, and no
+third-party SDK. Nothing about your library leaves the device.
+
+Features
+
+- Import photos, videos and GIFs into an encrypted vault.
+- Booru-style tagging with tags, artists and circles, plus search and filtering.
+- Configurable auto-lock on a timer or immediately, PIN lockout after repeated
+  wrong attempts, and optional biometric unlock.
+- Optional screenshot blocking, flip-to-panic lock, and a randomised PIN keypad.
+- A decoy vault with its own PIN, stored under separate paths.
+- Encrypted export and import of the whole vault as a single archive.
+- Light, dark and AMOLED themes.
+
+Security notes
+
+- Deleting a file overwrites it once with zeroes before unlinking. Flash storage
+  may not honour overwrites, so erasure cannot be guaranteed the way it can be
+  on a spinning disk.
+- Video playback decrypts the video into the app's credential-encrypted cache
+  and shreds it afterwards, because the system video view can only open a file
+  path. The cache is also wiped when the vault locks. It is not stored anywhere
+  public, but it is a case of plaintext on disk.
+- A 4-digit PIN is not resistant to offline brute-force attack if an attacker
+  has both your files and the ability to run code as you.
+- Backup archives are encrypted with PBKDF2-HMAC-SHA256 and AES-256-GCM.
+- The app has had no third-party security audit.
+
+Never uninstall the app to upgrade it. The vault key lives in the Android
+Keystore and is destroyed with the app, so uninstalling destroys the vault and
+its contents permanently. Install a newer version over the top instead.

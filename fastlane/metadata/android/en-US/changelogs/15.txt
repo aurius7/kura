@@ -1,0 +1,13 @@
+Auto-lock no longer depends on returning to the app, and a failed restore is
+now rolled back.
+
+Auto-lock is armed when you leave Kura rather than only being checked when you
+come back. Previously, pressing Home and reopening the app quickly could cancel
+the record that the app had been backgrounded, so the vault resumed unlocked
+regardless of the auto-lock setting, including the strictest immediate option.
+The background timestamp is now recorded as the last vault screen closes, so the
+lock fires on schedule while Kura sits in the background.
+
+A restore that is cancelled, interrupted by locking the vault, or fed a
+truncated archive is now unwound, instead of leaving part of a backup in the
+vault with no way to tell it apart from a complete restore.

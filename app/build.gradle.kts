@@ -23,25 +23,41 @@ android {
         keystorePropertiesFile.inputStream().use { keystoreProperties.load(it) }
     }
 
+    val releaseStorePath = System.getenv("KURA_KEYSTORE_PATH")
+        ?: keystoreProperties.getProperty("storeFile")
+        ?: "kura-release-v2.keystore"
+    val releaseStorePassword = System.getenv("KURA_STORE_PASSWORD")
+        ?: keystoreProperties.getProperty("storePassword")
+    val releaseKeyAlias = System.getenv("KURA_KEY_ALIAS")
+        ?: keystoreProperties.getProperty("keyAlias")
+        ?: "kura_rotated"
+    val releaseKeyPassword = System.getenv("KURA_KEY_PASSWORD")
+        ?: keystoreProperties.getProperty("keyPassword")
+
+    // Only sign a release build with the release key when that key is actually
+    // reachable. A checkout without the private keystore -- an F-Droid build, a
+    // contributor's clone, a CI job -- still has to compile, so it falls back to
+    // the debug key and the warning below makes sure nobody ships that by
+    // mistake. A normal local release build is unaffected.
+    val hasReleaseSigning = file(releaseStorePath).exists() &&
+        !releaseStorePassword.isNullOrBlank() && !releaseKeyPassword.isNullOrBlank()
+
+    if (!hasReleaseSigning) {
+        rootProject.logger.warn(
+            "Kura: no release keystore available, so the release build is signed " +
+                "with the debug key. Such an APK cannot update an existing Kura " +
+                "install and must not be published."
+        )
+    }
+
     signingConfigs {
         create("release") {
-            val keyStorePath = System.getenv("KURA_KEYSTORE_PATH")
-                ?: keystoreProperties.getProperty("storeFile")
-                ?: "kura-release-v2.keystore"
-            val sPass = System.getenv("KURA_STORE_PASSWORD")
-                ?: keystoreProperties.getProperty("storePassword")
-            val kAlias = System.getenv("KURA_KEY_ALIAS")
-                ?: keystoreProperties.getProperty("keyAlias")
-                ?: "kura_rotated"
-            val kPass = System.getenv("KURA_KEY_PASSWORD")
-                ?: keystoreProperties.getProperty("keyPassword")
-
-            val targetFile = file(keyStorePath)
-            storeFile = if (targetFile.isAbsolute) targetFile else file(keyStorePath)
-            keyAlias = kAlias
-            if (!sPass.isNullOrBlank() && !kPass.isNullOrBlank()) {
-                storePassword = sPass
-                keyPassword = kPass
+            val targetFile = file(releaseStorePath)
+            storeFile = if (targetFile.isAbsolute) targetFile else file(releaseStorePath)
+            keyAlias = releaseKeyAlias
+            if (!releaseStorePassword.isNullOrBlank() && !releaseKeyPassword.isNullOrBlank()) {
+                storePassword = releaseStorePassword
+                keyPassword = releaseKeyPassword
             }
             enableV1Signing = true
             enableV2Signing = true
@@ -65,7 +81,11 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("release")
+            signingConfig = if (hasReleaseSigning) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
         debug {
             isMinifyEnabled = false

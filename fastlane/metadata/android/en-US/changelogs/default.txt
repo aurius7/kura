@@ -1,0 +1,6 @@
+Auto-lock is armed when you leave Kura rather than only being checked when you
+come back. The background timestamp is now recorded as the last vault screen
+closes, so the lock fires on schedule while the app is in the background.
+
+A restore that is cancelled, interrupted, or fed a truncated archive is now
+rolled back instead of leaving part of a backup in the vault.
