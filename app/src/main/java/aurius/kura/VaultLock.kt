@@ -23,25 +23,85 @@ object VaultLock {
         private set
 
     private var lastBackgroundTime: Long = 0L
+    private var backgroundPrefs: Prefs? = null
     private var activeActivities: Int = 0
     private val handler = Handler(Looper.getMainLooper())
+
+    /**
+     * Fires once the app has genuinely been backgrounded, and arms the lock
+     * itself instead of waiting for the next resume to ask.
+     *
+     * Previously the timeout was only ever evaluated in `shouldLock`, which
+     * `BaseVaultActivity.onResume` calls. That meant a backgrounded vault stayed
+     * unlocked for as long as the user stayed away, and if the return trip took
+     * a path that skipped the check the vault simply came back unlocked. Locking
+     * on the way out means the unlocked state cannot outlive the trip, and the
+     * resume check below is a second net rather than the only one.
+     */
     private val backgroundRunnable = Runnable {
         if (activeActivities <= 0 && !isPickingMedia) {
             lastBackgroundTime = System.currentTimeMillis()
+            armBackgroundLock(backgroundPrefs)
         }
+    }
+
+    /**
+     * Schedules the lock for `backgrounded + autoLockTimeout`. A timeout of 0
+     * ("immediate") locks as soon as this runs; a negative timeout ("never")
+     * arms nothing.
+     */
+    private fun armBackgroundLock(prefs: Prefs?) {
+        handler.removeCallbacks(lockRunnable)
+        val p = prefs ?: return
+        if (!p.hasPin()) return
+        val timeoutSec = p.autoLockTimeout
+        if (timeoutSec < 0) return
+        android.util.Log.i("KuraLock", "Backgrounded: arming auto-lock in ${timeoutSec}s")
+        handler.postDelayed(lockRunnable, timeoutSec * 1000L)
+    }
+
+    /**
+     * How long to wait before treating "every activity stopped" as a real
+     * backgrounding.
+     *
+     * This grace period exists only to stop an in-app transition (activity A
+     * stopping as activity B starts) from counting as backgrounding. It has to
+     * be short: the stamp is the only record that the app was backgrounded, and
+     * if the user returns first, [onActivityStarted] cancels the pending runnable
+     * and the backgrounding is forgotten entirely -- `shouldLock` then returns
+     * false no matter how short the timeout is.
+     *
+     * At 1500ms that made "immediate" lock unreliable: pressing Home and
+     * reopening the app within a second and a half always resumed straight into
+     * the unlocked vault. 300ms is still far longer than an in-app transition
+     * takes to dispatch (same main-looper frame, ~16ms) while keeping the
+     * window in which a quick return is missed down from 1.5s to 0.3s.
+     */
+    private const val BACKGROUND_GRACE_MS = 300L
+
+    private val lockRunnable = Runnable {
+        android.util.Log.i("KuraLock", "Auto-lock timeout elapsed while backgrounded; locking")
+        lock()
     }
 
     fun onActivityStarted() {
         handler.removeCallbacks(backgroundRunnable)
+        handler.removeCallbacks(lockRunnable)
         activeActivities++
     }
 
-    fun onActivityStopped() {
+    fun onActivityStopped(prefs: Prefs) {
         activeActivities = (activeActivities - 1).coerceAtLeast(0)
         if (activeActivities == 0 && !isPickingMedia) {
             handler.removeCallbacks(backgroundRunnable)
-            // 1.5s grace period ensures activity transitions never count as backgrounding
-            handler.postDelayed(backgroundRunnable, 1500)
+            handler.removeCallbacks(lockRunnable)
+            // Stamp synchronously rather than inside the grace callback. If the
+            // app is later killed while backgrounded there is no resume path left
+            // to notice the backgrounding, and the recents snapshot of an
+            // unlocked vault is the thing we least want to leave behind.
+            lastBackgroundTime = System.currentTimeMillis()
+            backgroundPrefs = prefs
+            handler.postDelayed(backgroundRunnable, BACKGROUND_GRACE_MS)
         }
     }
 
@@ -67,9 +127,11 @@ object VaultLock {
         isUnlocked = true
         isDecoy = decoy
         lastBackgroundTime = 0L
+        backgroundPrefs = null
         sessionId++
         CryptoVault.evictAllThumbCaches()
         handler.removeCallbacks(backgroundRunnable)
+        handler.removeCallbacks(lockRunnable)
     }
 
     fun lock() {
@@ -77,8 +139,10 @@ object VaultLock {
         isDecoy = false
         isPickingMedia = false
         lastBackgroundTime = 0L
+        backgroundPrefs = null
         sessionId++
         CryptoVault.evictAllThumbCaches()
         handler.removeCallbacks(backgroundRunnable)
+        handler.removeCallbacks(lockRunnable)
     }
 }

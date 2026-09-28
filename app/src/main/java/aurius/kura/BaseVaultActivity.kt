@@ -85,8 +85,15 @@ abstract class BaseVaultActivity : AppCompatActivity(), SensorEventListener {
         // decoy unlock happened since). Its db handle, vault path and any decrypted
         // views belong to a session that no longer exists, so tear it down instead
         // of resuming: otherwise entering the decoy PIN still shows the real vault.
+        //
+        // A lock that fired while we were backgrounded lands here, because
+        // arming the lock on the way out is what VaultLock does now. Finishing
+        // without showing anything would drop the user on an empty task, so hand
+        // off to the lock screen instead.
         if (boundSession != -1L && boundSession != VaultLock.sessionId) {
-            finish()
+            VaultLock.lock()
+            wipePlayCacheAsync(this)
+            showLockScreenAndFinish()
             return
         }
         if (boundSession == -1L) boundSession = VaultLock.sessionId
@@ -98,19 +105,31 @@ abstract class BaseVaultActivity : AppCompatActivity(), SensorEventListener {
         if (VaultLock.shouldLock(prefs)) {
             VaultLock.lock()
             wipePlayCacheAsync(this)
-            try {
-                startActivity(lockActivityIntent())
-            } catch (_: Exception) {
-                try {
-                    val activeAlias = AppIconManager.getActiveAlias(this)
-                    startActivity(Intent().setClassName(packageName, "$packageName.$activeAlias").apply {
-                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-                    })
-                } catch (_: Exception) {}
-            }
-            finish()
+            showLockScreenAndFinish()
             return
         }
+    }
+
+    /**
+     * Clears the task and puts the lock screen in front of it.
+     *
+     * The alias fallback exists because a stale PackageManager component state
+     * can leave the real lock activity disabled; without it, refusing to lock is
+     * the only way to avoid a crash, which is the worst possible outcome for a
+     * vault.
+     */
+    private fun showLockScreenAndFinish() {
+        try {
+            startActivity(lockActivityIntent())
+        } catch (_: Exception) {
+            try {
+                val activeAlias = AppIconManager.getActiveAlias(this)
+                startActivity(Intent().setClassName(packageName, "$packageName.$activeAlias").apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                })
+            } catch (_: Exception) {}
+        }
+        finish()
     }
 
     override fun onPause() {
@@ -214,7 +233,7 @@ abstract class BaseVaultActivity : AppCompatActivity(), SensorEventListener {
 
     override fun onStop() {
         super.onStop()
-        VaultLock.onActivityStopped()
+        VaultLock.onActivityStopped(prefs)
     }
 
     companion object {

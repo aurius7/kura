@@ -17,9 +17,24 @@ import java.util.UUID
 
 /**
  * Encrypted vault: every media file is AES256-GCM encrypted via
- * EncryptedFile, stored in app-private filesDir/vault/. Plaintext
- * never touches disk except transient video playback copies in
- * app-private cacheDir/play/ which are wiped on lock/close.
+ * EncryptedFile, stored in app-private filesDir/vault/.
+ *
+ * Plaintext reaches disk in four places, all inside the
+ * credential-encrypted app-private cache:
+ *  - video playback, via [decryptToPlayCache]. This is the largest one.
+ *    `VideoView` only accepts a file path or Uri -- it cannot be handed a
+ *    MediaDataSource the way `MediaPlayer` can -- so playback necessarily goes
+ *    through a decrypted file. It is shredded when playback ends and the play
+ *    cache is wiped on lock. Removing it means replacing `VideoView` with
+ *    `MediaPlayer` + SurfaceView in DetailActivity and MainActivity.
+ *  - restore staging: the decrypted archive is written to cacheDir before
+ *    its entries are committed, so a wrong passphrase changes nothing;
+ *  - video thumbnails and metadata probing, only when the RAM path
+ *    (RamMediaDataSource) fails because the file will not fit in memory;
+ *  - user-requested plaintext export, including "delete original on import".
+ *
+ * RamMediaDataSource is only used for thumbnail and probe frames. It is never
+ * used for playback.
  */
 class CryptoVault(ctx: Context) {
     private val app = ctx.applicationContext
@@ -399,6 +414,15 @@ class CryptoVault(ctx: Context) {
         }
     }
 
+    /**
+     * Thumbnails only, never playback.
+     *
+     * The RAM path is tried first. This exists because
+     * MediaMetadataRetriever cannot seek into an encrypted file, and holding
+     * a multi-gigabyte video in a ByteArray to avoid a temp file is not always
+     * possible. When it does run, the plaintext frame is short-lived in the
+     * credential-encrypted cache and shredded in `finally`.
+     */
     private fun videoFrameDiskFallback(name: String, px: Int, extraRotation: Int = 0): Bitmap? {
         val target = fileFor(name)
         if (!target.exists() || target.length() == 0L) return null

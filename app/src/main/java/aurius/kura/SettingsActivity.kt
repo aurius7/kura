@@ -767,10 +767,23 @@ class SettingsActivity : BaseVaultActivity() {
      * read, so peak extra disk is one file and no plaintext is ever written.
      * The zip-bomb guards are kept, and `manifest.json` is still handled up
      * front because the format writes it as the first entry.
+     *
+     * Atomicity comes from the fact that a restore only ever *adds*: every
+     * entry is stored under a fresh UUID name, and a hash collision merges tags
+     * into the existing row rather than replacing the file. [RestoreJournal]
+     * records that work, so an archive that turns out to be truncated, cancelled
+     * by the user, or cut short by a lock is rolled back in full via
+     * [rollbackRestore] rather than leaving half a backup behind. Rolling back
+     * costs no extra disk, which is why this did not reintroduce the two-pass
+     * plaintext staging the previous version used.
+     *
+     * A per-entry failure is still tolerated (that entry is dropped, the rest of
+     * the archive continues), matching the original behaviour.
      */
     private fun processZipStream(rawIn: java.io.InputStream, expectedSession: Long) {
         var count = 0
-        var zipCorrupted = false
+        var aborted = false
+        val journal = RestoreJournal()
         if (!VaultLock.isUnlocked || VaultLock.sessionId != expectedSession) return
         val manifestMap = mutableMapOf<String, RestoredMeta>()
         val pendingEntries = mutableListOf<String>()
@@ -800,12 +813,15 @@ class SettingsActivity : BaseVaultActivity() {
                 val buf = ByteArray(64 * 1024)
                 var scanned = 0
                 while (true) {
-                    if (VaultProgress.isCancelled || !VaultLock.isUnlocked || VaultLock.sessionId != expectedSession) break
+                    if (VaultProgress.isCancelled || !VaultLock.isUnlocked || VaultLock.sessionId != expectedSession) {
+                        aborted = true
+                        break
+                    }
                     val entry = try {
                         zipIn.nextEntry ?: break
                     } catch (e: Exception) {
                         android.util.Log.e("KuraRestore", "Zip entry read failed", e)
-                        zipCorrupted = true
+                        aborted = true
                         break
                     }
                     val entryName = entry.name
@@ -876,13 +892,34 @@ class SettingsActivity : BaseVaultActivity() {
                             val exFile = vault.fileFor(existing.fileName)
                             if (exFile.exists() && exFile.length() > 0L) {
                                 vault.delete(vaultName)
+                                // Merging tags/favorite touches a row that predates
+                                // this restore, so capture its prior state first.
+                                if (tags.isNotEmpty() || fav) {
+                                    val prior = db.get(existing.id)
+                                    if (prior != null) {
+                                        journal.merge(RestoreMerge(prior.id, prior.tags, prior.favorite))
+                                    }
+                                }
                                 if (tags.isNotEmpty()) db.addTags(existing.id, tags)
                                 if (fav) db.setFavorite(existing.id, true)
                                 count++
                             } else {
+                                // Ghost row: the pre-clean pass above already
+                                // schedules these for removal and the file is
+                                // missing or zero-length, so there is nothing on
+                                // disk worth preserving. Recorded so an aborted
+                                // restore can put the row back.
+                                journal.ghost(
+                                    RestoreGhost(
+                                        existing.fileName, existing.mime, existing.width,
+                                        existing.height, existing.durationMs, existing.tags,
+                                        existing.rotation
+                                    )
+                                )
                                 db.delete(existing.id)
-                                vault.delete(existing.fileName)
                                 val nid = db.insertItem(vaultName, mime, 0, 0, 0, tags, hash)
+                                journal.createdRow(nid)
+                                journal.createdFile(vaultName)
                                 if (fav) db.setFavorite(nid, true)
                                 count++
                             }
@@ -896,6 +933,8 @@ class SettingsActivity : BaseVaultActivity() {
                                 if (iw > 0 && ih > 0) Triple(iw, ih, 0) else vault.probeVideo(vaultName)
                             }
                             val id = db.insertItem(vaultName, mime, w, h, d, tags, hash)
+                            journal.createdRow(id)
+                            journal.createdFile(vaultName)
                             if (fav) db.setFavorite(id, true)
                             count++
                         }
@@ -911,15 +950,19 @@ class SettingsActivity : BaseVaultActivity() {
                 }
             }
 
+            if (aborted) {
+                rollbackRestore(journal)
+                count = 0
+            }
+
             safePost {
-                if (VaultProgress.isCancelled) {
-                    toast("Restore cancelled ($count files restored)")
-                } else if (!VaultLock.isUnlocked || VaultLock.sessionId != expectedSession) {
-                    toast("Vault session changed. Restore aborted ($count files restored)")
-                } else if (zipCorrupted && count == 0) {
-                    toast("Restore failed: archive corrupted or unreadable")
-                } else if (zipCorrupted) {
-                    toast("Archive partially corrupted: restored $count files before error")
+                if (aborted) {
+                    when {
+                        VaultProgress.isCancelled -> toast("Restore cancelled. No changes were kept.")
+                        !VaultLock.isUnlocked || VaultLock.sessionId != expectedSession ->
+                            toast("Vault session changed. Restore aborted, no changes were kept.")
+                        else -> toast("Archive corrupted or unreadable. Restore rolled back, no changes were kept.")
+                    }
                 } else if (count > 0) {
                     toast("Successfully restored $count files from backup!")
                 } else {
@@ -928,9 +971,53 @@ class SettingsActivity : BaseVaultActivity() {
                 recreate()
             }
         } catch (e: Exception) {
-            safePost { toast("Restore failed: ${e.message}") }
+            rollbackRestore(journal)
+            safePost {
+                toast("Restore failed, no changes were kept: ${e.message}")
+                recreate()
+            }
         } finally {
             VaultProgress.finish()
+        }
+    }
+
+    /**
+     * Undoes a partially applied restore per [RestoreJournal.undoPlan]: drops
+     * the rows and encrypted files it created, restores rows it replaced, and
+     * reverts tag/favorite merges it made to rows that predate it.
+     */
+    private fun rollbackRestore(journal: RestoreJournal) {
+        if (journal.isEmpty) return
+        try {
+            for (undo in journal.undoPlan()) {
+                when (undo) {
+                    is RestoreUndo.DropRow -> {
+                        try { db.delete(undo.id) } catch (_: Exception) {}
+                    }
+                    is RestoreUndo.ShredFile -> {
+                        try { vault.delete(undo.name) } catch (_: Exception) {}
+                    }
+                    is RestoreUndo.ReinsertGhost -> {
+                        val g = undo.ghost
+                        try {
+                            db.insertItem(
+                                g.fileName, g.mime, g.width, g.height,
+                                g.durationMs, g.tags, "", g.rotation
+                            )
+                        } catch (_: Exception) {}
+                    }
+                    is RestoreUndo.RevertMerge -> {
+                        val m = undo.merge
+                        try {
+                            db.setTags(m.id, m.priorTags)
+                            db.setFavorite(m.id, m.priorFavorite)
+                        } catch (_: Exception) {}
+                    }
+                }
+            }
+            android.util.Log.i("KuraRestore", "Rolled back partial restore (${journal.undoPlan().size} steps)")
+        } catch (e: Exception) {
+            android.util.Log.e("KuraRestore", "Rollback failed", e)
         }
     }
 
@@ -1251,7 +1338,7 @@ class SettingsActivity : BaseVaultActivity() {
         supportCard.addView(headerRow)
 
         val cta = TextView(this).apply {
-            text = "Open Buy Me a Coffee"
+            text = "Buy Me a Coffee"
             textSize = 14f
             setTextColor(ThemeUtils.buttonTextColor(prefs, true))
             setTypeface(null, android.graphics.Typeface.BOLD)

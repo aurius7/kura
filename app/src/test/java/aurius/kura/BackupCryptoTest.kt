@@ -191,4 +191,89 @@ class BackupCryptoTest {
 
         assertArrayEquals(originalData, plainOut.toByteArray())
     }
+
+    /**
+     * A truncated archive must never decrypt silently. The chunked stream is
+     * terminated by a trailing zero-length chunk marker, so cutting the archive
+     * anywhere removes that marker and the reader either hits EOF mid-stream or
+     * fails the partial chunk's GCM tag. This is the property the restore path
+     * relies on: SettingsActivity decrypts to a temp file and only commits
+     * entries after decryptStream returns, so a detected failure means the
+     * archive is never treated as restorable.
+     */
+    @Test
+    fun testTruncatedArchiveFailsAtEveryCutPoint() {
+        val originalData = "TruncationProbePayload_abcdefghij".repeat(9000).toByteArray(Charsets.UTF_8)
+        val password = "TruncationProbe#2026".toCharArray()
+
+        val cipherOut = ByteArrayOutputStream()
+        BackupCrypto.encryptStream(ByteArrayInputStream(originalData), cipherOut, password)
+        val cipherBytes = cipherOut.toByteArray()
+
+        // Sanity check: the intact archive decrypts, so any failure below is
+        // caused by truncation and not by a broken test fixture.
+        val good = ByteArrayOutputStream()
+        BackupCrypto.decryptStream(ByteArrayInputStream(cipherBytes), good, password)
+        assertArrayEquals(originalData, good.toByteArray())
+
+        // Header, salt and chunk-boundary regions, plus a coarse sweep through
+        // the ciphertext and the tail where the terminator lives.
+        val cutPoints = (listOf(1, 8, 12, 20, 25, 40, 44) +
+            (1 until cipherBytes.size step 997).toList() +
+            listOf(cipherBytes.size - 5, cipherBytes.size - 4, cipherBytes.size - 2, cipherBytes.size - 1))
+            .distinct()
+            .filter { it in 1 until cipherBytes.size }
+
+        for (cut in cutPoints) {
+            val partial = cipherBytes.copyOf(cut)
+            val out = ByteArrayOutputStream()
+            var detected = false
+            var detail = ""
+            try {
+                BackupCrypto.decryptStream(ByteArrayInputStream(partial), out, password)
+            } catch (e: java.io.IOException) {
+                // EOFException when the cut lands on a chunk boundary, or an
+                // explicit "not a valid archive" when it lands in the header.
+                detected = true
+                detail = e.javaClass.simpleName
+            } catch (e: GeneralSecurityException) {
+                // AEADBadTagException when the cut lands inside a chunk.
+                detected = true
+                detail = e.javaClass.simpleName
+            }
+            assertTrue(
+                "Truncation at byte $cut of ${cipherBytes.size} decrypted silently ($detail)",
+                detected
+            )
+        }
+    }
+
+    /**
+     * A single flipped bit anywhere in a chunk's ciphertext must fail the GCM
+     * tag check. Guards against a future refactor weakening chunk
+     * authentication or dropping the sequence-number AAD.
+     */
+    @Test
+    fun testTamperedChunkFailsAuthentication() {
+        val originalData = "TamperProbePayload_0123456789".repeat(500).toByteArray(Charsets.UTF_8)
+        val password = "TamperProbe#2026".toCharArray()
+
+        val cipherOut = ByteArrayOutputStream()
+        BackupCrypto.encryptStream(ByteArrayInputStream(originalData), cipherOut, password)
+        val cipherBytes = cipherOut.toByteArray()
+
+        // magic (12) + salt (16) + chunk length (4) + iv (12) = 44.
+        val pos = 12 + 16 + 4 + 12 + 32
+        assertTrue("chunk ciphertext offset in range", pos < cipherBytes.size)
+        val tampered = cipherBytes.copyOf()
+        tampered[pos] = (tampered[pos].toInt() xor 0x01).toByte()
+
+        val out = ByteArrayOutputStream()
+        try {
+            BackupCrypto.decryptStream(ByteArrayInputStream(tampered), out, password)
+            fail("Expected GeneralSecurityException on tampered ciphertext")
+        } catch (e: GeneralSecurityException) {
+            // expected
+        }
+    }
 }
