@@ -96,8 +96,12 @@ class LockActivity : AppCompatActivity() {
                 window.attributes = lp
             }
 
-            // 2. Immersive edge-to-edge system bars (active if immersiveMode OR hideStatusBar is on)
-            val edgeToEdge = prefs.edgeToEdge
+            // 2. Edge-to-edge system bars. On Android 15+ (API 35) edge-to-edge is
+            // enforced for every app and cannot be opted out, so it is effectively
+            // always on there; on older devices it follows the user preference.
+            // The status bar can still be hidden afterwards (hideStatusBar), which
+            // collapses the reported top inset to zero.
+            val edgeToEdge = Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM || prefs.edgeToEdge
             WindowCompat.setDecorFitsSystemWindows(window, !edgeToEdge)
 
             window.statusBarColor = Color.TRANSPARENT
@@ -111,16 +115,7 @@ class LockActivity : AppCompatActivity() {
                 window.navigationBarColor = prefs.bgColor()
             }
 
-            // 3. Directly apply/clear fullscreen flag
-            if (prefs.hideStatusBar) {
-                @Suppress("DEPRECATION")
-                window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
-            } else {
-                @Suppress("DEPRECATION")
-                window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
-            }
-
-            // 4. Notification / Status bar hide/show safely on attached decorView
+            // 3. Notification / Status bar hide/show safely on attached decorView
             window.decorView.post {
                 try {
                     val controller = WindowCompat.getInsetsController(window, window.decorView)
@@ -423,8 +418,9 @@ class LockActivity : AppCompatActivity() {
 
         ViewCompat.setOnApplyWindowInsetsListener(sc) { _, insets ->
             val sysBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            val topInset = if (prefs.edgeToEdge && !prefs.hideStatusBar) sysBars.top else 0
-            val bottomInset = if (prefs.edgeToEdge) sysBars.bottom else 0
+            val effectiveEdgeToEdge = Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM || prefs.edgeToEdge
+            val topInset = if (effectiveEdgeToEdge && !prefs.hideStatusBar) sysBars.top else 0
+            val bottomInset = if (effectiveEdgeToEdge) sysBars.bottom else 0
             root.setPadding(40, topInset + 24, 40, 24 + bottomInset)
             insets
         }

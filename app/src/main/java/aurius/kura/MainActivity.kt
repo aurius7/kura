@@ -930,8 +930,9 @@ class MainActivity : BaseVaultActivity() {
 
         ViewCompat.setOnApplyWindowInsetsListener(rootFrame) { _, insets ->
             val sysBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            val topInset = if (prefs.edgeToEdge && !prefs.hideStatusBar) sysBars.top else 0
-            val bottomInset = if (prefs.edgeToEdge) sysBars.bottom else 0
+            val effectiveEdgeToEdge = Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM || prefs.edgeToEdge
+            val topInset = if (effectiveEdgeToEdge && !prefs.hideStatusBar) sysBars.top else 0
+            val bottomInset = if (effectiveEdgeToEdge) sysBars.bottom else 0
 
             val curPBarLp = pBar.layoutParams as? FrameLayout.LayoutParams
             if (curPBarLp != null) {
