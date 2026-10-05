@@ -187,6 +187,8 @@ class MainActivity : BaseVaultActivity() {
 
     private lateinit var adapter: GridAdapter
     private var searchRunnable: Runnable? = null
+    // Read from the worker thread as well, so keep the handoff explicit.
+    @Volatile private var suggGeneration = 0
 
     private var isMultiSelect: Boolean = false
     private val selectedIds = mutableSetOf<Long>()
@@ -706,11 +708,18 @@ class MainActivity : BaseVaultActivity() {
                     }
                     val text = raw
                     val lastToken = text.substringAfterLast(' ').removePrefix("-").trim()
+                    // Typing fires suggestions twice: once live, once more from the
+                    // debounced reload. Each request takes a number and only the
+                    // newest may draw, so a slower earlier query cannot overwrite
+                    // fresher suggestions.
+                    val gen = ++suggGeneration
                     if (lastToken.isNotEmpty()) {
                         bg.execute {
-                            val liveSugg = db.suggestTags(lastToken, limit = 8)
+                            val liveSugg = db.suggestTags(lastToken, limit = 10)
                             val qTags = Tags.parseList(text)
-                            mainHandler.post { renderSugg(liveSugg, qTags) }
+                            mainHandler.post {
+                                renderSugg(liveSugg, qTags, gen)
+                            }
                         }
                     }
                     searchRunnable?.let { mainHandler.removeCallbacks(it) }
@@ -1293,7 +1302,13 @@ class MainActivity : BaseVaultActivity() {
             val res = cleanRes
             val total = try { db.count() } catch (_: Exception) { 0 }
 
-            val prefix = (search.text?.toString() ?: "").substringAfterLast(" ", "").lowercase()
+            // "-miku" excludes a tag, but the suggestions worth offering are
+            // still the ones matching "miku".
+            val prefix = (search.text?.toString() ?: "")
+                .substringAfterLast(" ", "")
+                .removePrefix("-")
+                .lowercase()
+            val gen = suggGeneration
             val cands = try {
                 if (prefix.isEmpty()) db.allTags(12) else db.suggestTags(prefix, 12)
             } catch (_: Exception) { emptyList() }
@@ -1316,16 +1331,19 @@ class MainActivity : BaseVaultActivity() {
                     empty.setOnClickListener(null)
                     countView.text = "${res.size}/$total"
                 }
-                renderSugg(cands, q)
+                renderSugg(cands, q, gen)
                 checkMediaClickTutorial()
             }
         }
     }
 
-    private fun renderSugg(cands: List<Pair<String, Int>>, q: List<String>) {
+    private fun renderSugg(cands: List<Pair<String, Int>>, q: List<String>, gen: Int) {
+        if (gen != suggGeneration) return
         suggRow.removeAllViews()
+        var shown = 0
         for ((name, count) in cands) {
-            if (q.contains(name)) continue
+            // Already in the query: suggesting it again just adds a duplicate.
+            if (q.contains(name) || q.contains(Tags.displayName(name))) continue
             val chip = TextView(this).apply {
                 text = "${Tags.displayName(name)} ($count)"
                 textSize = 12f
@@ -1343,7 +1361,11 @@ class MainActivity : BaseVaultActivity() {
             suggRow.addView(chip, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
                 rightMargin = 12
             })
+            shown++
         }
+        if (isMultiSelect) return
+        // An empty row still reserved a strip under the search field.
+        sc.visibility = if (shown > 0 && prefs.showTagSuggestions) View.VISIBLE else View.GONE
     }
 
     private fun buildReelsContainer(parent: FrameLayout) {

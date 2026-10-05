@@ -104,10 +104,58 @@ object Tags {
         }
     }
 
-    /**
-     * Interactive guide dialog explaining the Booru tag system,
-     * category prefixes, color codes, and search tips.
-     */
+      /**
+       * Ranks tag suggestions for a partially typed term.
+       *
+       * Search-as-you-type should feel like a booru site's tag autocomplete: the
+       * tag someone is typing has to be reachable from any part of its name, not
+       * only the front, and the closest match has to come first. Ranking is by
+       * how the term lands in the tag, then by how many items use the tag, then
+       * alphabetically so the order is stable.
+       *
+       * Match tiers, best first:
+       *  1. the whole tag, e.g. `miku` for `miku`
+       *  2. the start of the tag, e.g. `hatsu` for `hatsune_miku`
+       *  3. the start of a word inside the tag, e.g. `miku` for `hatsune_miku`
+       *  4. anywhere in the tag, e.g. `tsune` for `hatsune_miku`
+       *
+       * Candidates that do not contain the term at all are dropped, so this is
+       * safe to call with a wider candidate pool than the caller intends to show.
+       * Pure and unit-tested; the database only supplies the candidates.
+       */
+      fun rankMatches(term: String, candidates: List<Pair<String, Int>>, limit: Int): List<Pair<String, Int>> {
+          val q = term.trim().lowercase().removePrefix("-")
+          if (q.isEmpty() || limit <= 0) return emptyList()
+
+          fun tier(name: String): Int {
+              val shown = displayName(name).lowercase()
+              return when {
+                  shown == q || name.lowercase() == q -> 0
+                  shown.startsWith(q) -> 1
+                  // Underscore is what normalize() uses for spaces, so it is
+                  // also where words inside a tag begin.
+                  shown.split('_').any { it.startsWith(q) } -> 2
+                  shown.contains(q) -> 3
+                  else -> -1
+              }
+          }
+
+          return candidates
+              .mapNotNull { (name, count) -> val t = tier(name); if (t < 0) null else Triple(name, count, t) }
+              .sortedWith(
+                  compareBy<Triple<String, Int, Int>> { it.third }
+                      .thenByDescending { it.second }
+                      .thenBy { it.first }
+              )
+              .take(limit)
+              .map { it.first to it.second }
+      }
+
+      /**
+       * Interactive guide dialog explaining the Booru tag system,
+       * category prefixes, color codes, and search tips.
+       */
+
     fun showGuideDialog(context: Context, prefs: Prefs) {
         val density = context.resources.displayMetrics.density
         val dp = { v: Int -> (v * density).toInt() }

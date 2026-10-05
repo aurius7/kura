@@ -8,3 +8,8 @@ place on the page.
 Media is centred on screen with the tags directly beneath it, video playback
 retries a decrypt that lost a race with cache cleanup, and the fullscreen
 control is an icon that no longer disappears on narrow screens.
+
+Tag search now offers the tag you are typing. Typing miku suggests
+hatsune_miku, the way booru tag fields do, and tapping a suggestion fills it
+in. Suggestions used to match only the very start of a tag, so a tag could
+never be reached from the word inside it.

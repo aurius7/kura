@@ -377,31 +377,41 @@ class BooruDb(private val appCtx: Context) {
         return name
     }
 
-    fun suggestTags(prefix: String, limit: Int = 15): List<Pair<String, Int>> {
+    /**
+     * Candidate tags for the suggestion row.
+     *
+     * Matching is deliberately broader than the query itself: a tag counts as a
+     * candidate when the term matches the start of the name, the start of the
+     * name after a category prefix (`c:hatsune_miku` for `hatsu`), or anywhere
+     * inside the name (`miku` for `hatsune_miku`). Booru sites behave this way,
+     * and prefix-only matching hid the tag someone was typing.
+     *
+     * The SQL only selects candidates; [Tags.rankMatches] orders them, so exact
+     * matches surface ahead of popular-but-partial ones.
+     */
+    fun suggestTags(term: String, limit: Int = 15): List<Pair<String, Int>> {
         val out = mutableListOf<Pair<String, Int>>()
-        val clean = prefix.replace("%", "").replace("_", "\\_").lowercase()
+        val clean = term.trim().lowercase()
+            .removePrefix("-")
+            .replace("%", "")
+            .replace("\\", "")
+            .replace("_", "\\_")
         if (clean.isEmpty()) return out
-        val queries = if (clean.contains(":")) {
-            listOf("$clean%")
-        } else {
-            listOf(
-                "$clean%",
-                "c:$clean%", "char:$clean%", "character:$clean%",
-                "a:$clean%", "art:$clean%", "artist:$clean%",
-                "s:$clean%", "series:$clean%", "copy:$clean%", "copyright:$clean%",
-                "m:$clean%", "meta:$clean%"
-            )
-        }
-        val placeholders = queries.joinToString(" OR ") { "name LIKE ? ESCAPE '\\'" }
         val db = readableDatabase
-        val allArgs = queries.toTypedArray() + arrayOf(limit.toString())
+        // Over-fetch, because ranking happens after the query and an infix match
+        // can pull in many rows that the ranking then discards.
+        val pool = (limit * 6).coerceIn(60, 300)
         db.rawQuery(
-            "SELECT name, count FROM tags WHERE ($placeholders) ORDER BY count DESC LIMIT ?",
-            allArgs
+            "SELECT name, count FROM tags WHERE " +
+                "(instr(name, ':') > 0 AND substr(name, instr(name, ':') + 1) LIKE ? ESCAPE '\\') " +
+                "OR name LIKE ? ESCAPE '\\' " +
+                "OR name LIKE ? ESCAPE '\\' " +
+                "ORDER BY count DESC LIMIT ?",
+            arrayOf("$clean%", "$clean%", "%$clean%", pool.toString())
         ).use { c ->
             while (c.moveToNext()) out.add(c.getString(0) to c.getInt(1))
         }
-        return out
+        return Tags.rankMatches(clean, out, limit)
     }
 
     fun allTags(limit: Int = 50): List<Pair<String, Int>> {
