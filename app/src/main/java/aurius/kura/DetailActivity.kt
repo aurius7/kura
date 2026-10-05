@@ -97,6 +97,7 @@ class DetailActivity : BaseVaultActivity() {
     // The control bar is one view that changes parent: docked under the video
     // in windowed mode, overlaid on the video in fullscreen.
     private var controlsBar: View? = null
+    private var volumeFlyoutRef: View? = null
     private var controlsVisible = true
 
     // In-app volume & playback speed state
@@ -120,6 +121,26 @@ class DetailActivity : BaseVaultActivity() {
         if (videoView?.isPlaying == true) {
             hideControls()
         }
+    }
+
+    private val hideVolumeFlyoutRunnable = Runnable {
+        volumeFlyoutRef?.visibility = View.GONE
+    }
+
+    // Tapping the volume icon raises the slider above the bar for a few
+    // seconds, then it gets out of the way again.
+    private fun showVolumeFlyout() {
+        val flyout = volumeFlyoutRef ?: return
+        flyout.visibility = View.VISIBLE
+        flyout.alpha = 0f
+        flyout.animate().alpha(1f).setDuration(140).start()
+        mainHandler.removeCallbacks(hideVolumeFlyoutRunnable)
+        mainHandler.postDelayed(hideVolumeFlyoutRunnable, 2600)
+    }
+
+    private fun hideVolumeFlyout() {
+        mainHandler.removeCallbacks(hideVolumeFlyoutRunnable)
+        volumeFlyoutRef?.visibility = View.GONE
     }
 
     private val updateProgressRunnable = object : Runnable {
@@ -359,6 +380,7 @@ class DetailActivity : BaseVaultActivity() {
         // In windowed mode the controls are part of the page under the video,
         // so they stay visible instead of hiding the seek bar out of reach.
         if (!isFullscreen) return
+        hideVolumeFlyout()
         controlsOverlay?.visibility = View.GONE
         controlsVisible = false
         mainHandler.removeCallbacks(autoHideControlsRunnable)
@@ -1162,6 +1184,8 @@ class DetailActivity : BaseVaultActivity() {
         controlsOverlay = null
         // The bar lives outside mediaBox while windowed, so it has to be
         // detached here or each item would stack another one under the page.
+        hideVolumeFlyout()
+        volumeFlyoutRef = null
         (controlsBar?.parent as? ViewGroup)?.removeView(controlsBar)
         controlsBar = null
         playPauseBtn = null
@@ -1246,9 +1270,9 @@ class DetailActivity : BaseVaultActivity() {
             }
             controlsOverlay = overlay
 
-            // Docked at the bottom
-            val bottomController = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
+            // The bar is a FrameLayout so the volume slider can float over it
+            // instead of taking a permanent slot in the controls row.
+            val bottomController = FrameLayout(this).apply {
                 background = GradientDrawable(
                     GradientDrawable.Orientation.TOP_BOTTOM,
                     intArrayOf(
@@ -1260,6 +1284,14 @@ class DetailActivity : BaseVaultActivity() {
                 setPadding(dp(12), dp(10), dp(12), dp(10))
                 setOnClickListener { /* consume clicks to prevent dismiss */ }
             }
+
+            val barContent = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+            }
+            bottomController.addView(barContent, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT
+            ))
 
             // 1. Scrubber SeekBar (Minimalist track)
             val scrubber = SeekBar(this).apply {
@@ -1289,9 +1321,21 @@ class DetailActivity : BaseVaultActivity() {
                     resetAutoHide()
                 }
             })
-            bottomController.addView(scrubber, LinearLayout.LayoutParams(
+            // Seekbar and timestamp share a row: the controls row is already
+            // dense with navigation buttons, and truncating the timestamp there
+            // was hiding half of it.
+            val seekRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            barContent.addView(seekRow, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
+            ))
+            seekRow.addView(scrubber, LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                1f
             ))
 
             // 2. Minimalist Single-Line Controls Row
@@ -1375,10 +1419,15 @@ class DetailActivity : BaseVaultActivity() {
                 setPadding(dp(7), dp(5), dp(7), dp(5))
                 setOnClickListener { safeSeekBackward() }
             }
-            controlsRow.addView(rewindBtn, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { rightMargin = dp(6) })
+            // The seek chips are redundant with the double-tap gestures, so the
+            // narrowest screens drop them rather than clip the fullscreen button.
+            val roomForSeekChips = resources.configuration.screenWidthDp >= 340
+            if (roomForSeekChips) {
+                controlsRow.addView(rewindBtn, LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { rightMargin = dp(6) })
+            }
 
             // Forward 10s
             val fwdBtn = TextView(this).apply {
@@ -1391,14 +1440,15 @@ class DetailActivity : BaseVaultActivity() {
                 setPadding(dp(7), dp(5), dp(7), dp(5))
                 setOnClickListener { safeSeekForward() }
             }
-            controlsRow.addView(fwdBtn, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { rightMargin = dp(8) })
+            if (roomForSeekChips) {
+                controlsRow.addView(fwdBtn, LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { rightMargin = dp(8) })
+            }
 
-            // Timestamp (00:00 / 00:00). Weighted so it gives up width instead of
-            // pushing the mute/volume/fullscreen buttons off the right edge on
-            // narrow screens.
+            // Timestamp (00:00 / 00:00), parked beside the seekbar so it always
+            // has room no matter how many controls the row carries.
             val timeLbl = TextView(this).apply {
                 text = "00:00 / 00:00"
                 textSize = 11f
@@ -1408,7 +1458,10 @@ class DetailActivity : BaseVaultActivity() {
                 ellipsize = TextUtils.TruncateAt.END
             }
             timeText = timeLbl
-            controlsRow.addView(timeLbl, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            seekRow.addView(timeLbl, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ))
 
             // Mute / Unmute
             val mute = TextView(this).apply {
@@ -1447,8 +1500,14 @@ class DetailActivity : BaseVaultActivity() {
                         resetAutoHide()
                     }
                 }
-                override fun onStartTrackingTouch(sb: SeekBar?) { resetAutoHide() }
-                override fun onStopTrackingTouch(sb: SeekBar?) { resetAutoHide() }
+                override fun onStartTrackingTouch(sb: SeekBar?) {
+                    mainHandler.removeCallbacks(hideVolumeFlyoutRunnable)
+                    resetAutoHide()
+                }
+                override fun onStopTrackingTouch(sb: SeekBar?) {
+                    mainHandler.postDelayed(hideVolumeFlyoutRunnable, 2600)
+                    resetAutoHide()
+                }
             })
 
             mute.setOnClickListener {
@@ -1462,13 +1521,32 @@ class DetailActivity : BaseVaultActivity() {
                 vBar.progress = (eff * 100).toInt()
                 mute.setVolumeIcon(eff == 0f)
                 ThemeUtils.vibrateTick(mute)
+                showVolumeFlyout()
                 resetAutoHide()
             }
             controlsRow.addView(mute)
-            // Give the volume slider less width on narrow screens so the row
-            // still fits once the item navigation buttons are in it.
-            val volWidth = if (resources.configuration.screenWidthDp < 360) dp(32) else dp(44)
-            controlsRow.addView(vBar, LinearLayout.LayoutParams(volWidth, LinearLayout.LayoutParams.WRAP_CONTENT))
+
+            // The slider itself floats above the bar on demand, so the row keeps
+            // only the icon and the timestamp keeps its full width.
+            val volumeFlyout = FrameLayout(this).apply {
+                background = roundedBg(0xF21A1A1E.toInt(), dp(14).toFloat())
+                elevation = dp(6).toFloat()
+                setPadding(dp(10), dp(2), dp(10), dp(2))
+                visibility = View.GONE
+            }
+            volumeFlyout.addView(vBar, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT
+            ))
+            volumeFlyoutRef = volumeFlyout
+            bottomController.addView(volumeFlyout, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.END or Gravity.BOTTOM
+            ).apply {
+                bottomMargin = dp(46)
+                rightMargin = dp(2)
+            })
 
             // Fullscreen toggle button
             val fsBtn = ImageView(this).apply {
@@ -1489,7 +1567,7 @@ class DetailActivity : BaseVaultActivity() {
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply { leftMargin = dp(6) })
 
-            bottomController.addView(controlsRow)
+            barContent.addView(controlsRow)
 
             controlsBar = bottomController
             attachControlsBelowVideo()
