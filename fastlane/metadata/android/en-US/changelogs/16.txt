@@ -16,4 +16,5 @@ one fills it in. The * wildcard now works where you type it, so small* and
 ta*1 search the vault the same way they do on gelbooru and rule34. The
 suggestion row is also sized in dp rather than pixels, which makes the chips
 readable and tappable, and it says when nothing matches instead of leaving an
-empty gap.
+empty gap. Typing a tag's full name still offers that tag, which is what the row
+is for.

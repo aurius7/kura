@@ -105,6 +105,25 @@ object Tags {
     }
 
       /**
+       * Whether [name] is worth offering as a suggestion while [query] is typed.
+       *
+       * A tag already committed to the query is not offered again, since tapping
+       * it would only duplicate it. The tag currently being typed is the one
+       * exception, and it has to stay: completing `lucy` into the stored
+       * `c:lucy` is the entire point of the row, and filtering on "already in the
+       * query" hid it. The search results already contained the media, so the row
+       * looked broken while the tag plainly existed.
+       *
+       * [term] is the token under the cursor and [query] the whole box, parsed.
+       */
+      fun shouldSuggest(term: String, name: String, query: List<String>): Boolean {
+          val shown = displayName(name)
+          val t = term.trim().lowercase().removePrefix("-")
+          if (t.isNotEmpty() && (shown.equals(t, true) || name.equals(t, true))) return true
+          return query.none { it.equals(name, true) || it.equals(shown, true) }
+      }
+
+      /**
        * True when the term uses the booru `*` wildcard.
        *
        * Both gelbooru and rule34 accept it anywhere in a tag: `ta*1` matches tags

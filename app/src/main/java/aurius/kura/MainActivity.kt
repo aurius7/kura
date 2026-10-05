@@ -1353,8 +1353,10 @@ class MainActivity : BaseVaultActivity() {
         suggRow.removeAllViews()
         var shown = 0
         for ((name, count) in cands) {
-            // Already in the query: suggesting it again just adds a duplicate.
-            if (q.contains(name) || q.contains(Tags.displayName(name))) continue
+            // A tag already in the box is not offered again, but the tag being
+            // typed still is: completing lucy into the stored c:lucy is the
+            // whole point of the row.
+            if (!Tags.shouldSuggest(term, name, q)) continue
             val tag = Tags.displayName(name)
             val chip = TextView(this).apply {
                 text = "$tag  $count"

@@ -179,3 +179,44 @@ class TagGlobTest {
         assertEquals(listOf("c" to 3, "b" to 2), Tags.rankMatches("*", cands, 2))
     }
 }
+
+class TagSuggestFilterTest {
+
+    @Test
+    fun testTheTagBeingTypedIsStillOffered() {
+        // Completing "lucy" into the stored "c:lucy" is the point of the row.
+        assertTrue(Tags.shouldSuggest("lucy", "c:lucy", listOf("lucy")))
+        assertTrue(Tags.shouldSuggest("lucy", "lucy", listOf("lucy")))
+        assertTrue(Tags.shouldSuggest("hatsune_miku", "c:hatsune_miku", listOf("hatsune_miku")))
+    }
+
+    @Test
+    fun testExactCategorySpellingOfTheTermIsOffered() {
+        assertTrue(Tags.shouldSuggest("c:lucy", "c:lucy", listOf("c:lucy")))
+        assertTrue(Tags.shouldSuggest("character:lucy", "character:lucy", listOf("character:lucy")))
+    }
+
+    @Test
+    fun testOtherCommittedTagsAreNotOfferedAgain() {
+        assertFalse(Tags.shouldSuggest("lucy", "c:miku", listOf("miku")))
+        assertFalse(Tags.shouldSuggest("lucy", "miku", listOf("miku")))
+        assertFalse(Tags.shouldSuggest("", "c:miku", listOf("miku")))
+    }
+
+    @Test
+    fun testCommittedTagStaysHiddenOnceTheTokenIsFinished() {
+        // Trailing space means the token is done, so lucy is a duplicate now.
+        assertFalse(Tags.shouldSuggest("", "c:lucy", listOf("lucy")))
+    }
+
+    @Test
+    fun testNegatedTermStillOffersItsTag() {
+        assertTrue(Tags.shouldSuggest("-lucy", "c:lucy", listOf("-lucy")))
+    }
+
+    @Test
+    fun testUnrelatedTagIsOffered() {
+        assertTrue(Tags.shouldSuggest("lucy", "c:lucy_horn", listOf("lucy")))
+        assertTrue(Tags.shouldSuggest("lu", "c:lucy", listOf("lu")))
+    }
+}
