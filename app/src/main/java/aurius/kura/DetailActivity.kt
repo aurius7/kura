@@ -23,6 +23,7 @@ import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.inputmethod.EditorInfo
@@ -92,6 +93,10 @@ class DetailActivity : BaseVaultActivity() {
     private var volumeBar: SeekBar? = null
     private var muteBtn: TextView? = null
     private var isUserScrubbing = false
+
+    // The control bar is one view that changes parent: docked under the video
+    // in windowed mode, overlaid on the video in fullscreen.
+    private var controlsBar: View? = null
     private var controlsVisible = true
 
     // In-app volume & playback speed state
@@ -291,14 +296,57 @@ class DetailActivity : BaseVaultActivity() {
 
     private fun resetAutoHide() {
         mainHandler.removeCallbacks(autoHideControlsRunnable)
-        if (videoView?.isPlaying == true) {
+        if (isFullscreen && videoView?.isPlaying == true) {
             mainHandler.postDelayed(autoHideControlsRunnable, 3500)
         }
+    }
+
+    // Windowed: the controls sit in the page flow directly under the video, so
+    // they stay put and never cover the media.
+    private fun attachControlsBelowVideo() {
+        val bar = controlsBar ?: return
+        (bar.parent as? ViewGroup)?.removeView(bar)
+        bar.background = GradientDrawable().apply {
+            cornerRadius = dp(14).toFloat()
+            setColor(0xFF1A1A1E.toInt())
+        }
+        bar.setPadding(dp(12), dp(6), dp(12), dp(6))
+        val lp = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            bottomMargin = dp(10)
+        }
+        col.addView(bar, col.indexOfChild(mediaContainer) + 1, lp)
+    }
+
+    // Fullscreen: the controls float over the video, anchored to the bottom.
+    private fun attachControlsToOverlay() {
+        val bar = controlsBar ?: return
+        (bar.parent as? ViewGroup)?.removeView(bar)
+        bar.background = GradientDrawable(
+            GradientDrawable.Orientation.TOP_BOTTOM,
+            intArrayOf(
+                0x00000000,          // Transparent fade
+                0x88000000.toInt(),  // Translucent dark glass
+                0xDD000000.toInt()   // Solid dark base
+            )
+        )
+        bar.setPadding(dp(12), dp(10), dp(12), dp(10))
+        controlsOverlay?.addView(
+            bar,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM
+            )
+        )
     }
 
     private fun showControls() {
         val overlay = controlsOverlay ?: return
         overlay.visibility = View.VISIBLE
+        controlsBar?.visibility = View.VISIBLE
         controlsVisible = true
         playPauseBtn?.setPlayPauseIcon(videoView?.isPlaying == true)
         val eff = if (isMuted) 0f else appVol
@@ -308,6 +356,9 @@ class DetailActivity : BaseVaultActivity() {
     }
 
     private fun hideControls() {
+        // In windowed mode the controls are part of the page under the video,
+        // so they stay visible instead of hiding the seek bar out of reach.
+        if (!isFullscreen) return
         controlsOverlay?.visibility = View.GONE
         controlsVisible = false
         mainHandler.removeCallbacks(autoHideControlsRunnable)
@@ -793,7 +844,7 @@ class DetailActivity : BaseVaultActivity() {
             override fun handleOnBackPressed() {
                 if (isFullscreen) {
                     setFullscreen(false)
-                } else if (controlsVisible && videoView != null) {
+                } else if (isFullscreen && controlsVisible && videoView != null) {
                     hideControls()
                 } else {
                     isEnabled = false
@@ -802,6 +853,8 @@ class DetailActivity : BaseVaultActivity() {
             }
         })
     }
+
+    private fun dp(v: Int): Int = (v * resources.displayMetrics.density + 0.5f).toInt()
 
     private fun TextView.setPlayPauseIcon(playing: Boolean) {
         setCompoundDrawablesWithIntrinsicBounds(
@@ -858,7 +911,11 @@ class DetailActivity : BaseVaultActivity() {
     private fun updateMediaContainerHeight(itemW: Int, itemH: Int) {
         if (isFullscreen) return
         val boxH = computeMediaContainerHeight(itemW, itemH)
-        val top = if (viewportHeight > 300) ((viewportHeight - boxH) / 2).coerceAtLeast(0) else 0
+        // Sit the media a little above the optical centre so the control bar and
+        // tags below it balance out instead of the media looking bottom-heavy.
+        val top = if (viewportHeight > 300)
+            ((viewportHeight - boxH) * 0.38f).toInt().coerceAtLeast(0)
+        else 0
         val lp = mediaContainer.layoutParams as? LinearLayout.LayoutParams
             ?: LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -909,6 +966,7 @@ class DetailActivity : BaseVaultActivity() {
             blankRunway.visibility = View.GONE
 
             updateFullscreenDimensions()
+            attachControlsToOverlay()
             hideSystemBars()
             fsToggleBtn?.setFullscreenIcon(true)
             resetAutoHide()
@@ -936,6 +994,7 @@ class DetailActivity : BaseVaultActivity() {
                 )
             }
             showSystemBars()
+            attachControlsBelowVideo()
             fsToggleBtn?.setFullscreenIcon(false)
             resetAutoHide()
         }
@@ -1101,6 +1160,10 @@ class DetailActivity : BaseVaultActivity() {
         videoView = null
         zoomImageView = null
         controlsOverlay = null
+        // The bar lives outside mediaBox while windowed, so it has to be
+        // detached here or each item would stack another one under the page.
+        (controlsBar?.parent as? ViewGroup)?.removeView(controlsBar)
+        controlsBar = null
         playPauseBtn = null
         videoSeekBar = null
         timeText = null
@@ -1238,6 +1301,24 @@ class DetailActivity : BaseVaultActivity() {
                 setPadding(dp(4), dp(4), dp(4), 0)
             }
 
+            // Previous item. Kept compact and tucked against the play button so
+            // the row reads as one navigation cluster instead of two loose sets.
+            val prevBtn = ImageView(this).apply {
+                setImageResource(R.drawable.ic_prev)
+                scaleType = ImageView.ScaleType.CENTER_INSIDE
+                background = ThemeUtils.surfaceGlass(prefs, 12f, 1)
+                setPadding(dp(6), dp(6), dp(6), dp(6))
+                contentDescription = "Previous item"
+                setOnClickListener {
+                    navigatePrev()
+                    resetAutoHide()
+                }
+            }
+            controlsRow.addView(prevBtn, LinearLayout.LayoutParams(
+                dp(30),
+                dp(30)
+            ).apply { rightMargin = dp(4) })
+
             // Play / Pause
             val playBtn = TextView(this).apply {
                 text = ""
@@ -1264,7 +1345,24 @@ class DetailActivity : BaseVaultActivity() {
             controlsRow.addView(playBtn, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { rightMargin = dp(6) })
+            ).apply { rightMargin = dp(4) })
+
+            // Next item
+            val nextBtn = ImageView(this).apply {
+                setImageResource(R.drawable.ic_next)
+                scaleType = ImageView.ScaleType.CENTER_INSIDE
+                background = ThemeUtils.surfaceGlass(prefs, 12f, 1)
+                setPadding(dp(6), dp(6), dp(6), dp(6))
+                contentDescription = "Next item"
+                setOnClickListener {
+                    navigateNext()
+                    resetAutoHide()
+                }
+            }
+            controlsRow.addView(nextBtn, LinearLayout.LayoutParams(
+                dp(30),
+                dp(30)
+            ).apply { rightMargin = dp(10) })
 
             // Rewind 10s
             val rewindBtn = TextView(this).apply {
@@ -1274,7 +1372,7 @@ class DetailActivity : BaseVaultActivity() {
                 setTextColor(prefs.textColor())
                 gravity = Gravity.CENTER
                 background = ThemeUtils.surfaceGlass(prefs, 12f, 1)
-                setPadding(dp(8), dp(5), dp(8), dp(5))
+                setPadding(dp(7), dp(5), dp(7), dp(5))
                 setOnClickListener { safeSeekBackward() }
             }
             controlsRow.addView(rewindBtn, LinearLayout.LayoutParams(
@@ -1290,7 +1388,7 @@ class DetailActivity : BaseVaultActivity() {
                 setTextColor(prefs.textColor())
                 gravity = Gravity.CENTER
                 background = ThemeUtils.surfaceGlass(prefs, 12f, 1)
-                setPadding(dp(8), dp(5), dp(8), dp(5))
+                setPadding(dp(7), dp(5), dp(7), dp(5))
                 setOnClickListener { safeSeekForward() }
             }
             controlsRow.addView(fwdBtn, LinearLayout.LayoutParams(
@@ -1367,7 +1465,10 @@ class DetailActivity : BaseVaultActivity() {
                 resetAutoHide()
             }
             controlsRow.addView(mute)
-            controlsRow.addView(vBar, LinearLayout.LayoutParams(dp(56), LinearLayout.LayoutParams.WRAP_CONTENT))
+            // Give the volume slider less width on narrow screens so the row
+            // still fits once the item navigation buttons are in it.
+            val volWidth = if (resources.configuration.screenWidthDp < 360) dp(32) else dp(44)
+            controlsRow.addView(vBar, LinearLayout.LayoutParams(volWidth, LinearLayout.LayoutParams.WRAP_CONTENT))
 
             // Fullscreen toggle button
             val fsBtn = ImageView(this).apply {
@@ -1390,11 +1491,8 @@ class DetailActivity : BaseVaultActivity() {
 
             bottomController.addView(controlsRow)
 
-            overlay.addView(bottomController, FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.BOTTOM
-            ))
+            controlsBar = bottomController
+            attachControlsBelowVideo()
 
             videoContainer.addView(overlay)
 
