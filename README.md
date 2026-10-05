@@ -2,9 +2,9 @@
 
 # Kura
 
-**An offline encrypted media vault for Android.**
+**An encrypted media vault for Android.**
 
-No ads. No tracking. No accounts. An offline build that declares no `INTERNET`
+No ads. No tracking. No accounts. The default build declares no `INTERNET`
 permission at all.
 
 </div>
@@ -87,7 +87,7 @@ privately, and for what does not count as one.
 
 **Permissions**
 
-The offline build declares `USE_BIOMETRIC`, used solely to unlock the vault, and
+The default build declares `USE_BIOMETRIC`, used solely to unlock the vault, and
 `REQUEST_INSTALL_PACKAGES`, which grants no data access and no network access. It
 exists only because Android has no silent install, so putting an APK in front of
 the system installer requires it.
