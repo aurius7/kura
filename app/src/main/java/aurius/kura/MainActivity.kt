@@ -55,6 +55,9 @@ import java.util.concurrent.Executors
 /** Max queued grid thumbnail decodes before the oldest pending one is dropped. */
 private const val GRID_QUEUE_DEPTH = 24
 
+/** How many tag suggestions the row shows at once. */
+private const val SUGGEST_LIMIT = 14
+
 class MainActivity : BaseVaultActivity() {
     private lateinit var db: BooruDb
     private lateinit var vault: CryptoVault
@@ -187,8 +190,8 @@ class MainActivity : BaseVaultActivity() {
 
     private lateinit var adapter: GridAdapter
     private var searchRunnable: Runnable? = null
-    // Read from the worker thread as well, so keep the handoff explicit.
-    @Volatile private var suggGeneration = 0
+    // The query the visible suggestion row belongs to, read on the worker thread.
+    @Volatile private var suggQuery = ""
 
     private var isMultiSelect: Boolean = false
     private val selectedIds = mutableSetOf<Long>()
@@ -272,6 +275,9 @@ class MainActivity : BaseVaultActivity() {
             startActivity(Intent(this, CrashActivity::class.java).putExtra("trace", "Previous run crash trace:\n$trace"))
         }
         reload()
+        // The row is populated from the search box, so seed it once the box and
+        // the row exist; otherwise it sits empty until the first keystroke.
+        requestSugg(search.text?.toString().orEmpty())
         handleIncomingShareIntent(intent)
         checkSearchTagIntent(intent)
     }
@@ -706,22 +712,7 @@ class MainActivity : BaseVaultActivity() {
                         sanitizing = false
                         return
                     }
-                    val text = raw
-                    val lastToken = text.substringAfterLast(' ').removePrefix("-").trim()
-                    // Typing fires suggestions twice: once live, once more from the
-                    // debounced reload. Each request takes a number and only the
-                    // newest may draw, so a slower earlier query cannot overwrite
-                    // fresher suggestions.
-                    val gen = ++suggGeneration
-                    if (lastToken.isNotEmpty()) {
-                        bg.execute {
-                            val liveSugg = db.suggestTags(lastToken, limit = 10)
-                            val qTags = Tags.parseList(text)
-                            mainHandler.post {
-                                renderSugg(liveSugg, qTags, gen)
-                            }
-                        }
-                    }
+                    requestSugg(raw)
                     searchRunnable?.let { mainHandler.removeCallbacks(it) }
                     searchRunnable = Runnable { reload() }
                     mainHandler.postDelayed(searchRunnable!!, 250)
@@ -754,13 +745,20 @@ class MainActivity : BaseVaultActivity() {
         updateFav()
         rootLayout.addView(srow)
 
-        // Horizontal Suggestions Bar
+        // Tag suggestion row, directly under the search field. Sized in dp: the
+        // old padding and corner radius were raw pixels, which on a 3x screen
+        // made the chips too small to read and too small to tap.
         sc = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
+            isVerticalScrollBarEnabled = false
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-            setPadding(12, 2, 12, 8)
+            setPadding(dp(10), dp(2), dp(10), dp(6))
+            clipToPadding = false
         }
-        suggRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        suggRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+        }
         sc.addView(suggRow)
         rootLayout.addView(sc)
 
@@ -1302,17 +1300,6 @@ class MainActivity : BaseVaultActivity() {
             val res = cleanRes
             val total = try { db.count() } catch (_: Exception) { 0 }
 
-            // "-miku" excludes a tag, but the suggestions worth offering are
-            // still the ones matching "miku".
-            val prefix = (search.text?.toString() ?: "")
-                .substringAfterLast(" ", "")
-                .removePrefix("-")
-                .lowercase()
-            val gen = suggGeneration
-            val cands = try {
-                if (prefix.isEmpty()) db.allTags(12) else db.suggestTags(prefix, 12)
-            } catch (_: Exception) { emptyList() }
-
             mainHandler.post {
                 items = res
                 adapter.notifyDataSetChanged()
@@ -1331,40 +1318,82 @@ class MainActivity : BaseVaultActivity() {
                     empty.setOnClickListener(null)
                     countView.text = "${res.size}/$total"
                 }
-                renderSugg(cands, q, gen)
                 checkMediaClickTutorial()
             }
         }
     }
 
-    private fun renderSugg(cands: List<Pair<String, Int>>, q: List<String>, gen: Int) {
-        if (gen != suggGeneration) return
+    /**
+     * Asks for the suggestions for [text] and draws them when they come back.
+     *
+     * The search box is the only writer of the suggestion row. Every keystroke
+     * posts one query, and a result is dropped only if the box has moved on
+     * since, so a slow query can never replace fresher suggestions and the row
+     * cannot be left showing something the box no longer says.
+     */
+    private fun dp(v: Int): Int = (v * resources.displayMetrics.density + 0.5f).toInt()
+
+    private fun requestSugg(text: String) {
+        suggQuery = text
+        // The token being typed drives the suggestions. An empty box offers the
+        // most used tags instead, the way gelbooru's tag list opens.
+        val term = text.substringAfterLast(' ').removePrefix("-").trim()
+        bg.execute {
+            val cands = try {
+                if (term.isEmpty()) db.allTags(12) else db.suggestTags(term, SUGGEST_LIMIT)
+            } catch (_: Exception) { emptyList() }
+            val q = Tags.parseList(text)
+            mainHandler.post {
+                if (suggQuery == text) renderSugg(cands, q, term)
+            }
+        }
+    }
+
+    private fun renderSugg(cands: List<Pair<String, Int>>, q: List<String>, term: String) {
         suggRow.removeAllViews()
         var shown = 0
         for ((name, count) in cands) {
             // Already in the query: suggesting it again just adds a duplicate.
             if (q.contains(name) || q.contains(Tags.displayName(name))) continue
+            val tag = Tags.displayName(name)
             val chip = TextView(this).apply {
-                text = "${Tags.displayName(name)} ($count)"
-                textSize = 12f
+                text = "$tag  $count"
+                textSize = 14f
                 setTextColor(Tags.color(name, prefs))
-                background = ThemeUtils.surfaceGlass(prefs, 16f, 1)
-                setPadding(22, 10, 22, 10)
+                background = ThemeUtils.surfaceGlass(prefs, dp(18).toFloat(), dp(1))
+                setPadding(dp(16), dp(10), dp(16), dp(10))
+                gravity = android.view.Gravity.CENTER
+                minHeight = dp(40)
+                maxLines = 1
+                isClickable = true
                 setOnClickListener {
                     ThemeUtils.vibrateTick(this)
+                    // Replace the half-typed token with the whole tag, which is
+                    // what tapping a suggestion in any tag field is expected to do.
                     val cur = search.text.toString()
                     val base = if (cur.contains(" ")) cur.substringBeforeLast(" ") + " " else ""
-                    search.setText(base + Tags.displayName(name) + " ")
+                    search.setText(base + tag + " ")
                     search.setSelection(search.text.length)
                 }
             }
             suggRow.addView(chip, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                rightMargin = 12
+                rightMargin = dp(8)
             })
             shown++
         }
+        if (shown == 0 && term.isNotEmpty()) {
+            // Say so, rather than leaving an empty gap that reads as broken.
+            val hint = TextView(this).apply {
+                text = "No tag matches \"$term\""
+                textSize = 13f
+                setTextColor(prefs.textColorSecondary())
+                setPadding(dp(14), dp(10), dp(14), dp(10))
+                maxLines = 1
+            }
+            suggRow.addView(hint, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+            shown++
+        }
         if (isMultiSelect) return
-        // An empty row still reserved a strip under the search field.
         sc.visibility = if (shown > 0 && prefs.showTagSuggestions) View.VISIBLE else View.GONE
     }
 

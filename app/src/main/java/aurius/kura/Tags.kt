@@ -105,6 +105,34 @@ object Tags {
     }
 
       /**
+       * True when the term uses the booru `*` wildcard.
+       *
+       * Both gelbooru and rule34 accept it anywhere in a tag: `ta*1` matches tags
+       * starting with `ta` and ending with `1`, `*ass` matches `small_ass`, and
+       * `small*` matches `small_breasts`. Kura accepted none of that, so a partial
+       * memory of a tag could not be turned into a search.
+       */
+      fun isGlob(term: String): Boolean = term.contains('*')
+
+      /**
+       * Translates a booru glob into a SQL LIKE pattern, escaping the characters
+       * LIKE would otherwise treat as wildcards. A tag name can legally hold `%`
+       * and `_`, so escaping them is what keeps `100%_cotton` searchable and stops
+       * a `%` typed into the search box from matching everything.
+       */
+      fun globToLike(term: String): String {
+          val sb = StringBuilder()
+          for (ch in term.trim().lowercase()) {
+              when (ch) {
+                  '*' -> sb.append('%')
+                  '%', '_', '\\' -> sb.append('\\').append(ch)
+                  else -> sb.append(ch)
+              }
+          }
+          return sb.toString()
+      }
+
+      /**
        * Ranks tag suggestions for a partially typed term.
        *
        * Search-as-you-type should feel like a booru site's tag autocomplete: the
@@ -119,6 +147,10 @@ object Tags {
        *  3. the start of a word inside the tag, e.g. `miku` for `hatsune_miku`
        *  4. anywhere in the tag, e.g. `tsune` for `hatsune_miku`
        *
+       * A glob has already been narrowed by the query that built the candidate
+       * list, so it is ordered by popularity alone, the way rule34 orders its
+       * autocomplete results.
+       *
        * Candidates that do not contain the term at all are dropped, so this is
        * safe to call with a wider candidate pool than the caller intends to show.
        * Pure and unit-tested; the database only supplies the candidates.
@@ -128,6 +160,7 @@ object Tags {
           if (q.isEmpty() || limit <= 0) return emptyList()
 
           fun tier(name: String): Int {
+              if (isGlob(q)) return 0
               val shown = displayName(name).lowercase()
               return when {
                   shown == q || name.lowercase() == q -> 0

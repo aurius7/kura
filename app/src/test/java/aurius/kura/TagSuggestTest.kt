@@ -130,3 +130,52 @@ class TagSuggestTest {
         )
     }
 }
+
+class TagGlobTest {
+
+    @Test
+    fun testWildcardDetection() {
+        assertTrue(Tags.isGlob("small*"))
+        assertTrue(Tags.isGlob("*ass"))
+        assertTrue(Tags.isGlob("ta*1"))
+        assertFalse(Tags.isGlob("miku"))
+        assertFalse(Tags.isGlob(""))
+    }
+
+    @Test
+    fun testGlobBecomesLikePattern() {
+        assertEquals("ta%1", Tags.globToLike("ta*1"))
+        assertEquals("%ass", Tags.globToLike("*ass"))
+        assertEquals("small%", Tags.globToLike("small*"))
+        assertEquals("hats%\\_miku", Tags.globToLike("hats*_miku"))
+    }
+
+    @Test
+    fun testGlobEscapesLikeWildcards() {
+        // A tag can hold % and _, so they have to be literal in the pattern or
+        // "100%" would match every tag in the vault.
+        assertEquals("100\\%\\_cotton", Tags.globToLike("100%_cotton"))
+        assertEquals("a\\%b", Tags.globToLike("a%b"))
+    }
+
+    @Test
+    fun testGlobIsLowercased() {
+        assertEquals("hats%", Tags.globToLike("Hats*"))
+    }
+
+    @Test
+    fun testGlobSuggestionsAreOrderedByPopularity() {
+        // rule34 orders its autocomplete purely by post count.
+        val cands = listOf("small_breasts" to 12, "smaller_dom" to 900, "small" to 40)
+        assertEquals(
+            listOf("smaller_dom", "small", "small_breasts"),
+            Tags.rankMatches("small*", cands, 10).map { it.first }
+        )
+    }
+
+    @Test
+    fun testGlobRankingRespectsLimit() {
+        val cands = listOf("a" to 1, "b" to 2, "c" to 3)
+        assertEquals(listOf("c" to 3, "b" to 2), Tags.rankMatches("*", cands, 2))
+    }
+}

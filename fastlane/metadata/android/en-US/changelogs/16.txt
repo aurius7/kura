@@ -9,7 +9,11 @@ Media is centred on screen with the tags directly beneath it, video playback
 retries a decrypt that lost a race with cache cleanup, and the fullscreen
 control is an icon that no longer disappears on narrow screens.
 
-Tag search now offers the tag you are typing. Typing miku suggests
-hatsune_miku, the way booru tag fields do, and tapping a suggestion fills it
-in. Suggestions used to match only the very start of a tag, so a tag could
-never be reached from the word inside it.
+Tag search now works like the booru tag fields it copies its model from.
+Suggestions match anywhere in a tag, so miku finds hatsune_miku, they are
+ordered with the closest match first and the most used tag next, and tapping
+one fills it in. The * wildcard now works where you type it, so small* and
+ta*1 search the vault the same way they do on gelbooru and rule34. The
+suggestion row is also sized in dp rather than pixels, which makes the chips
+readable and tappable, and it says when nothing matches instead of leaving an
+empty gap.

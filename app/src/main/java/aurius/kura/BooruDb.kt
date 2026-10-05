@@ -298,19 +298,17 @@ class BooruDb(private val appCtx: Context) {
 
         if (include.isNotEmpty()) {
             for (inc in include) {
-                val vars = Tags.variants(inc)
-                val placeholders = vars.joinToString(",") { "?" }
-                whereClauses.add("EXISTS (SELECT 1 FROM item_tags jt JOIN tags t ON t.id=jt.tag_id WHERE jt.item_id=i.id AND t.name IN ($placeholders))")
-                args.addAll(vars)
+                val (clause, termArgs) = tagMatchClause("EXISTS", inc)
+                whereClauses.add(clause)
+                args.addAll(termArgs)
             }
         }
 
         if (exclude.isNotEmpty()) {
             for (exc in exclude) {
-                val vars = Tags.variants(exc)
-                val placeholders = vars.joinToString(",") { "?" }
-                whereClauses.add("NOT EXISTS (SELECT 1 FROM item_tags jt JOIN tags t ON t.id=jt.tag_id WHERE jt.item_id=i.id AND t.name IN ($placeholders))")
-                args.addAll(vars)
+                val (clause, termArgs) = tagMatchClause("NOT EXISTS", exc)
+                whereClauses.add(clause)
+                args.addAll(termArgs)
             }
         }
 
@@ -326,6 +324,31 @@ class BooruDb(private val appCtx: Context) {
         }
         if (shuffle) out.shuffle()
         return out
+    }
+
+    /**
+     * Builds the per-term tag condition for [search].
+     *
+     * A plain term is an exact tag, widened to the category variants so `miku`
+     * also finds `c:miku` and `character:miku`. A term with `*` is a booru
+     * wildcard and becomes a LIKE, matched against both the whole tag name and
+     * the part after a category prefix, so `ta*1` and `hats*` behave the way
+     * they do on gelbooru and rule34.
+     */
+    private fun tagMatchClause(op: String, term: String): Pair<String, List<String>> {
+        val head = "$op (SELECT 1 FROM item_tags jt JOIN tags t ON t.id=jt.tag_id " +
+                "WHERE jt.item_id=i.id AND "
+        val t = term.trim().lowercase()
+        return if (Tags.isGlob(t)) {
+            val like = Tags.globToLike(t)
+            head + "(t.name LIKE ? ESCAPE '\\' " +
+                    "OR (instr(t.name, ':') > 0 AND substr(t.name, instr(t.name, ':') + 1) LIKE ? ESCAPE '\\')))" to
+                    listOf(like, like)
+        } else {
+            val vars = Tags.variants(t)
+            val placeholders = vars.joinToString(",") { "?" }
+            head + "t.name IN ($placeholders))" to vars
+        }
     }
 
     fun allItems(): List<Item> {
@@ -380,34 +403,52 @@ class BooruDb(private val appCtx: Context) {
     /**
      * Candidate tags for the suggestion row.
      *
-     * Matching is deliberately broader than the query itself: a tag counts as a
-     * candidate when the term matches the start of the name, the start of the
-     * name after a category prefix (`c:hatsune_miku` for `hatsu`), or anywhere
-     * inside the name (`miku` for `hatsune_miku`). Booru sites behave this way,
-     * and prefix-only matching hid the tag someone was typing.
+     * Matching follows the booru tag fields this app copies its tag model from.
+     * A plain term matches the start of the name, the start after a category
+     * prefix (`c:hatsune_miku` for `hatsu`), or anywhere inside the name (`miku`
+     * for `hatsune_miku`), because that is how people recall a tag and how
+     * gelbooru's tag search and rule34's autocomplete both behave. A term
+     * containing `*` is a glob and matches positionally, like `small*` or
+     * `ta*1`.
      *
-     * The SQL only selects candidates; [Tags.rankMatches] orders them, so exact
-     * matches surface ahead of popular-but-partial ones.
+     * The SQL only selects candidates; [Tags.rankMatches] orders them, so an
+     * exact tag surfaces ahead of a popular but partial one.
      */
     fun suggestTags(term: String, limit: Int = 15): List<Pair<String, Int>> {
         val out = mutableListOf<Pair<String, Int>>()
         val clean = term.trim().lowercase()
             .removePrefix("-")
-            .replace("%", "")
             .replace("\\", "")
-            .replace("_", "\\_")
         if (clean.isEmpty()) return out
         val db = readableDatabase
         // Over-fetch, because ranking happens after the query and an infix match
         // can pull in many rows that the ranking then discards.
         val pool = (limit * 6).coerceIn(60, 300)
+
+        if (Tags.isGlob(clean)) {
+            val like = Tags.globToLike(clean)
+            // Same two shapes as below: the whole name, and the name after a
+            // category prefix, so `hats*` still finds `character:hatsune_miku`.
+            db.rawQuery(
+                "SELECT name, count FROM tags WHERE " +
+                    "name LIKE ? ESCAPE '\\' " +
+                    "OR (instr(name, ':') > 0 AND substr(name, instr(name, ':') + 1) LIKE ? ESCAPE '\\') " +
+                    "ORDER BY count DESC LIMIT ?",
+                arrayOf(like, like, pool.toString())
+            ).use { c ->
+                while (c.moveToNext()) out.add(c.getString(0) to c.getInt(1))
+            }
+            return Tags.rankMatches(clean, out, limit)
+        }
+
+        val escaped = clean.replace("%", "").replace("_", "\\_")
         db.rawQuery(
             "SELECT name, count FROM tags WHERE " +
                 "(instr(name, ':') > 0 AND substr(name, instr(name, ':') + 1) LIKE ? ESCAPE '\\') " +
                 "OR name LIKE ? ESCAPE '\\' " +
                 "OR name LIKE ? ESCAPE '\\' " +
                 "ORDER BY count DESC LIMIT ?",
-            arrayOf("$clean%", "$clean%", "%$clean%", pool.toString())
+            arrayOf("$escaped%", "$escaped%", "%$escaped%", pool.toString())
         ).use { c ->
             while (c.moveToNext()) out.add(c.getString(0) to c.getInt(1))
         }
