@@ -4,6 +4,17 @@
 
     <!-- Core permission: biometric unlock -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+
+    <!--
+        Required on API 26+ by any app that hands an APK to the system
+        installer, which is how an update is installed at all: Android has no
+        silent install, so the user always confirms. It grants no data access and
+        no network access; it only lets Kura show the install prompt. The
+        offline flavor needs it for an APK the user picked from storage, and the
+        online flavor for one it fetched itself.
+    -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <uses-feature android:name="android.hardware.fingerprint" android:required="false" />
 
     <application
@@ -198,6 +209,21 @@
         <activity
             android:name=".SettingsActivity"
             android:exported="false" />
+
+        <!--
+            Lets the system installer read one APK out of Kura's cache. The path
+            is narrowed to the updates directory so the provider can never be
+            used to hand out a vault file.
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.updates"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/update_file_paths" />
+        </provider>
 
         <!-- Strip AndroidX ProfileInstallReceiver so android.permission.DUMP is completely eliminated -->
         <receiver

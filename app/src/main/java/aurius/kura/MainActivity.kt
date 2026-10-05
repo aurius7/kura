@@ -55,6 +55,9 @@ import java.util.concurrent.Executors
 /** Max queued grid thumbnail decodes before the oldest pending one is dropped. */
 private const val GRID_QUEUE_DEPTH = 24
 
+/** Automatic update checks are throttled to once a day. */
+private const val UPDATE_CHECK_INTERVAL_MS = 24L * 60L * 60L * 1000L
+
 /** How many tag suggestions the row shows at once. */
 private const val SUGGEST_LIMIT = 14
 
@@ -278,6 +281,7 @@ class MainActivity : BaseVaultActivity() {
         // The row is populated from the search box, so seed it once the box and
         // the row exist; otherwise it sits empty until the first keystroke.
         requestSugg(search.text?.toString().orEmpty())
+        maybeAutoCheckForUpdate()
         handleIncomingShareIntent(intent)
         checkSearchTagIntent(intent)
     }
@@ -1331,6 +1335,85 @@ class MainActivity : BaseVaultActivity() {
      * since, so a slow query can never replace fresher suggestions and the row
      * cannot be left showing something the box no longer says.
      */
+    /**
+     * Looks for a newer release at most once a day, and only in the build that
+     * can reach the network. Android has no silent install, so this can only
+     * offer: it fetches one small file, compares the version, and asks.
+     */
+    private fun maybeAutoCheckForUpdate() {
+        if (!BuildConfig.NETWORK_UPDATES || !prefs.autoCheckUpdates) return
+        val last = prefs.lastUpdateCheck
+        if (last > 0 && System.currentTimeMillis() - last < UPDATE_CHECK_INTERVAL_MS) return
+
+        bg.execute {
+            prefs.lastUpdateCheck = System.currentTimeMillis()
+            val body = UpdateChecker.readSmall(UpdateChecker.UPDATE_JSON_URL)
+            val release = body?.let { UpdateChecker.parseRelease(it) } ?: return@execute
+            val current = try {
+                packageManager.getPackageInfo(packageName, 0).versionCode
+            } catch (_: Exception) {
+                return@execute
+            }
+            if (!UpdateChecker.isNewer(current, release.versionCode)) return@execute
+            if (release.forCurrentFlavor() == null) return@execute
+            mainHandler.post { showUpdateAvailable(release) }
+        }
+    }
+
+    private fun showUpdateAvailable(release: ReleaseInfo) {
+        val mine = try { packageManager.getPackageInfo(packageName, 0).versionName } catch (_: Exception) { "" }
+        AlertDialog.Builder(this)
+            .setTitle("Kura ${release.versionName} is available")
+            .setMessage(
+                "You are on $mine. The file is checked against the published checksum and " +
+                    "signing key before the installer opens, and Android asks you to confirm " +
+                    "the install."
+            )
+            .setPositiveButton("Download") { _, _ -> downloadUpdate(release) }
+            .setNegativeButton("Later", null)
+            .show()
+    }
+
+    /**
+     * Downloads, verifies, then opens the installer. The checksum and the
+     * signing key are both checked first, so a bad download is refused before
+     * Android is asked to install anything.
+     */
+    private fun downloadUpdate(release: ReleaseInfo) {
+        val asset = release.forCurrentFlavor() ?: return
+        android.widget.Toast.makeText(this, "Downloading Kura ${release.versionName}...", android.widget.Toast.LENGTH_SHORT).show()
+        bg.execute {
+            val staged = java.io.File(UpdateChecker.stagingDir(this), "kura-${release.versionCode}.apk")
+            val ok = UpdateChecker.download(asset.apkUrl, staged)
+            val verdict = if (!ok) UpdateChecker.Verdict.Unreadable else UpdateChecker.verify(
+                this, staged, installedVersionCode, asset.sha256, UpdateChecker.ownCertHex(this)
+            )
+            mainHandler.post {
+                when (verdict) {
+                    is UpdateChecker.Verdict.Ok ->
+                        if (ApkInstaller.canInstall(this)) {
+                            ApkInstaller.install(this, verdict.file)
+                        } else {
+                            android.widget.Toast.makeText(
+                                this, "Allow Kura to install apps to finish updating",
+                                android.widget.Toast.LENGTH_LONG
+                            ).show()
+                            ApkInstaller.openInstallPermissionSettings(this)
+                        }
+                    UpdateChecker.Verdict.BadHash ->
+                        android.widget.Toast.makeText(this, "Download did not match the published checksum", android.widget.Toast.LENGTH_LONG).show()
+                    UpdateChecker.Verdict.WrongSigner ->
+                        android.widget.Toast.makeText(this, "That file is signed with a different key", android.widget.Toast.LENGTH_LONG).show()
+                    else ->
+                        android.widget.Toast.makeText(this, "Download failed or was not a newer Kura", android.widget.Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    private val installedVersionCode: Int
+        get() = try { packageManager.getPackageInfo(packageName, 0).versionCode } catch (_: Exception) { 0 }
+
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density + 0.5f).toInt()
 
     private fun requestSugg(text: String) {

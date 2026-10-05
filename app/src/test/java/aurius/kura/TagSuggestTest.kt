@@ -220,3 +220,80 @@ class TagSuggestFilterTest {
         assertTrue(Tags.shouldSuggest("lu", "c:lucy", listOf("lu")))
     }
 }
+
+class UpdateCheckerTest {
+
+    private val a = "a".repeat(64)
+    private val b = "b".repeat(64)
+
+    private val good = """
+        {"versionName":"1.0.3","versionCode":17,
+         "flavors":{
+           "offline":{"apkUrl":"https://example.invalid/kura.apk","sha256":"$a","sizeBytes":2961972},
+           "online":{"apkUrl":"https://example.invalid/kura-online.apk","sha256":"$b","sizeBytes":2964686}},
+         "notesUrl":"https://example.invalid/notes"}
+    """.trimIndent()
+
+    @Test
+    fun testParsesAWellFormedRelease() {
+        val r = UpdateChecker.parseRelease(good)!!
+        assertEquals("1.0.3", r.versionName)
+        assertEquals(17, r.versionCode)
+        assertEquals(2, r.flavors.size)
+        assertEquals("https://example.invalid/kura.apk", r.flavors["offline"]!!.apkUrl)
+        assertEquals(2964686L, r.flavors["online"]!!.sizeBytes)
+    }
+
+    @Test
+    fun testEachFlavorIsOfferedItsOwnBuild() {
+        val r = UpdateChecker.parseRelease(good)!!
+        val mine = r.forCurrentFlavor()
+        assertNotNull("this build must find its own entry", mine)
+        assertEquals(64, mine!!.sha256.length)
+        // The whole point: an offline build must never be handed the networked APK.
+        assertNotEquals(r.flavors["offline"]!!.sha256, r.flavors["online"]!!.sha256)
+    }
+
+    @Test
+    fun testRejectsIncompleteOrNonsense() {
+        assertNull(UpdateChecker.parseRelease(""))
+        assertNull(UpdateChecker.parseRelease("not json"))
+        assertNull(UpdateChecker.parseRelease("{}"))
+        assertNull(UpdateChecker.parseRelease("""{"versionCode":17}"""))
+        assertNull(UpdateChecker.parseRelease("""{"versionCode":17,"flavors":{}}"""))
+    }
+
+    @Test
+    fun testRejectsAnEntryWithoutAUsableDigest() {
+        assertNull(
+            UpdateChecker.parseRelease(
+                """{"versionCode":17,"flavors":{"offline":{"apkUrl":"x","sha256":"abc"}}}"""
+            )
+        )
+    }
+
+    @Test
+    fun testOnlyStrictlyNewerReleasesAreOffered() {
+        assertTrue(UpdateChecker.isNewer(16, 17))
+        assertFalse(UpdateChecker.isNewer(17, 17))
+        assertFalse(UpdateChecker.isNewer(17, 16))
+    }
+
+    @Test
+    fun testCertComparisonIgnoresCaseAndSeparators() {
+        val k = "ad9059713b4d8d998c025f231023f18875699c7ef34b767bba6e5e6f114a1f3f"
+        assertTrue(UpdateChecker.sameCert(k, k.uppercase()))
+        assertTrue(UpdateChecker.sameCert(k, k.chunked(2).joinToString(":")))
+        assertTrue(UpdateChecker.sameCert(k, " ${k.uppercase().chunked(2).joinToString(": ")} "))
+        assertFalse(UpdateChecker.sameCert(k, "b".repeat(64)))
+    }
+
+    @Test
+    fun testDigestIsComputedOverContent() {
+        // Known SHA-256 of "abc".
+        assertEquals(
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+            UpdateChecker.sha256Hex("abc".toByteArray())
+        )
+    }
+}

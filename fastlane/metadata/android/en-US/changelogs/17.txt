@@ -1,0 +1,21 @@
+Kura can now update itself, and there is a build for people who would rather it
+could not.
+
+Two builds are published from the same source. Both hold your media in the same
+encrypted vault, both carry the same version number and are signed with the same
+key, so you can switch between them and neither will ask you to uninstall.
+
+The offline build declares no network permission and never opens a connection.
+Updates work by pointing Kura at an APK you already have: it reads that file's
+version and signing key, checks them against what is installed, and only then
+opens the installer.
+
+The online build adds one network permission, used for a single request: asking
+whether a newer version exists. It downloads a new version when you agree and
+checks the published checksum and signing key before the installer opens.
+
+Android does not allow any app to install an update on its own, so nothing here
+installs quietly. Every update ends with a system prompt you have to accept, and
+Kura says so rather than pretending otherwise. Settings also shows the version
+you are on and can copy the signing key, which is what you compare against the
+one in the release notes.

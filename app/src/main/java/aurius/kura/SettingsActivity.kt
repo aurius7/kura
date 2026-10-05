@@ -233,6 +233,33 @@ class SettingsActivity : BaseVaultActivity() {
         }
     }
 
+    /** A downloaded APK the user points Kura at, for the offline update path. */
+    private val pickApkLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@registerForActivityResult
+        toast("Checking the file...")
+        bg.execute {
+            val staged = UpdateChecker.copyToStaging(this, uri)
+            val verdict = staged?.let {
+                UpdateChecker.verify(
+                    this, it,
+                    installedVersionCode(),
+                    expectedSha = pendingExpectedSha,
+                    expectedCert = UpdateChecker.ownCertHex(this)
+                )
+            } ?: UpdateChecker.Verdict.Unreadable
+            mainHandler.post { onApkChecked(verdict) }
+        }
+    }
+
+    /** Checksum the next picked file is expected to match, when one is known. */
+    private var pendingExpectedSha: String? = null
+
+    private fun installedVersionCode(): Int =
+        try { packageManager.getPackageInfo(packageName, 0).versionCode } catch (_: Exception) { 0 }
+
+    private fun installedVersionName(): String =
+        try { packageManager.getPackageInfo(packageName, 0).versionName ?: "" } catch (_: Exception) { "" }
+
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density + 0.5f).toInt()
     private fun dp(v: Float): Int = (v * resources.displayMetrics.density + 0.5f).toInt()
     private fun dpF(v: Float): Float = v * resources.displayMetrics.density
@@ -1755,6 +1782,165 @@ class SettingsActivity : BaseVaultActivity() {
         }
     }
 
+    /**
+     * The Updates card.
+     *
+     * What it can do depends on the flavor, and it says so rather than showing a
+     * toggle that quietly does nothing. The offline build cannot reach the
+     * network, so its automatic check is inert and the only way in is pointing
+     * Kura at an APK that is already on the device. Both flavors can install a
+     * verified APK, and neither can install it silently.
+     */
+    private fun addUpdatesCard(parent: LinearLayout) {
+        val online = BuildConfig.NETWORK_UPDATES
+
+        settingRow(
+            parent,
+            "📡 Check for updates automatically",
+            if (online) "Once a day when Kura opens. The install is still your confirmation."
+            else "Unavailable: this build declares no network permission.",
+            if (online && prefs.autoCheckUpdates) "ON" else "OFF"
+        ) {
+            if (!online) {
+                toast("This build cannot use the network. Install from a file below.")
+                return@settingRow
+            }
+            prefs.autoCheckUpdates = !prefs.autoCheckUpdates
+            recreate()
+        }
+
+        settingRow(
+            parent,
+            "🔍 Check now",
+            if (online) "Ask the release page for a newer version"
+            else "Ask the release page for a newer version, then install it from a file",
+            "Scan"
+        ) {
+            if (online) manualUpdateCheck() else openReleasePage()
+        }
+
+        settingRow(
+            parent,
+            "📦 Install from a file",
+            "Pick a downloaded Kura APK. The version and signing key are checked before the installer opens.",
+            "Choose"
+        ) {
+            if (!ApkInstaller.canInstall(this)) {
+                toast("Allow Kura to install apps first")
+                ApkInstaller.openInstallPermissionSettings(this)
+                return@settingRow
+            }
+            pendingExpectedSha = null
+            try {
+                pickApkLauncher.launch(arrayOf("application/vnd.android.package-archive", "application/octet-stream"))
+            } catch (_: Exception) {
+                toast("No file picker available")
+            }
+        }
+
+        settingRow(
+            parent,
+            "📝 Installed version",
+            "v${installedVersionName()}  ·  versionCode ${installedVersionCode()}",
+            "Copy key"
+        ) {
+            val cert = UpdateChecker.ownCertHex(this)
+            if (cert == null) {
+                toast("Could not read the signing key")
+            } else {
+                copyToClipboard("Kura signing key SHA-256", cert)
+                toast("Signing key copied")
+            }
+        }
+    }
+
+    /** Manual check. Only the online flavor can do anything here. */
+    private fun manualUpdateCheck() {
+        if (!BuildConfig.NETWORK_UPDATES) {
+            openReleasePage()
+            return
+        }
+        toast("Checking for updates...")
+        bg.execute {
+            val body = UpdateChecker.readSmall(UpdateChecker.UPDATE_JSON_URL)
+            val release = body?.let { UpdateChecker.parseRelease(it) }
+            val current = installedVersionCode()
+            val offer = release
+                ?.takeIf { UpdateChecker.isNewer(current, it.versionCode) }
+                ?.takeIf { it.forCurrentFlavor() != null }
+            mainHandler.post {
+                prefs.lastUpdateCheck = System.currentTimeMillis()
+                if (release == null) {
+                    showUpdateProblem("Could not read the update information. Check the network and try again.")
+                } else if (offer == null) {
+                    showUpdateProblem("Kura ${installedVersionName()} is the latest version.")
+                } else {
+                    offerDownload(offer)
+                }
+            }
+        }
+    }
+
+    private fun openReleasePage() = ApkInstaller.openExternal(this, ApkInstaller.RELEASE_PAGE)
+
+    /**
+     * Downloads a published release, verifies it, then offers the installer.
+     * The checksum comes from the same update.json, so a truncated or swapped
+     * download is refused before Android is asked to install anything.
+     */
+    private fun offerDownload(release: ReleaseInfo) {
+        val asset = release.forCurrentFlavor() ?: return
+        toast("Downloading Kura ${release.versionName}...")
+        bg.execute {
+            val staged = File(UpdateChecker.stagingDir(this), "kura-${release.versionCode}.apk")
+            val ok = UpdateChecker.download(asset.apkUrl, staged)
+            val verdict = if (!ok) UpdateChecker.Verdict.Unreadable else UpdateChecker.verify(
+                this, staged, installedVersionCode(), asset.sha256, UpdateChecker.ownCertHex(this)
+            )
+            mainHandler.post { onApkChecked(verdict, release) }
+        }
+    }
+
+    private fun onApkChecked(verdict: UpdateChecker.Verdict, release: ReleaseInfo? = null) {
+        when (verdict) {
+            is UpdateChecker.Verdict.Ok -> {
+                val name = if (verdict.versionName.isNotBlank()) verdict.versionName else release?.versionName.orEmpty()
+                showBlackDialog(
+                    title = "Install Kura ${if (name.isNotBlank()) name else "update"}?",
+                    subtitle = "The file was checked against the published checksum and signing key.",
+                    positiveBtnText = "Install",
+                    onPositive = { confirmInstall(verdict.file) },
+                    negativeBtnText = "Not now"
+                ) { _, _ -> }
+            }
+            UpdateChecker.Verdict.NotNewer ->
+                showUpdateProblem("That file is not newer than the version you are running.")
+            UpdateChecker.Verdict.BadHash ->
+                showUpdateProblem("That file does not match the published checksum, so it was refused. It may be truncated or altered.")
+            UpdateChecker.Verdict.WrongSigner ->
+                showUpdateProblem("That file is signed with a different key, so it is not an update of this app.")
+            UpdateChecker.Verdict.Unreadable ->
+                showUpdateProblem("That file could not be read as a Kura APK.")
+        }
+    }
+
+    private fun confirmInstall(file: File) {
+        if (!ApkInstaller.canInstall(this)) {
+            toast("Allow Kura to install apps, then try again")
+            ApkInstaller.openInstallPermissionSettings(this)
+            return
+        }
+        ApkInstaller.install(this, file)
+    }
+
+    private fun showUpdateProblem(message: String) {
+        showBlackDialog(
+            title = "No update installed",
+            subtitle = message,
+            negativeBtnText = "Close"
+        ) { _, _ -> }
+    }
+
     private fun showSecurityPolicyDialog() {
         showBlackDialog(
             title = "Security & Architecture",
@@ -2190,6 +2376,11 @@ class SettingsActivity : BaseVaultActivity() {
             finish()
         }
 
+        // 5b. Updates
+        section(col, "Updates")
+        val updCard = card(col)
+        addUpdatesCard(updCard)
+
         settingRow(helpCard, "🛡️ Security Architecture & Privacy Policy", "Zero-permission offline design & AES-256-GCM encryption", "View Policy") {
             showSecurityPolicyDialog()
         }
@@ -2284,6 +2475,12 @@ class SettingsActivity : BaseVaultActivity() {
     }
 
     private fun toast(m: String) = Toast.makeText(this, m, Toast.LENGTH_SHORT).show()
+
+    private fun copyToClipboard(label: String, value: String) {
+        getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+            ?.let { it as android.content.ClipboardManager }
+            ?.setPrimaryClip(android.content.ClipData.newPlainText(label, value))
+    }
 
     override fun onResume() {
         super.onResume()

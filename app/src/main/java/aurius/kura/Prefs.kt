@@ -131,6 +131,24 @@ class Prefs(ctx: Context) {
         get() = ui.getBoolean("show_tag_sugg", true)
         set(v) = ui.edit().putBoolean("show_tag_sugg", v).apply()
 
+    // ---- Updates ----
+
+    /**
+     * Whether to look for a new version when Kura opens.
+     *
+     * Only the online flavor can act on this; the offline build keeps the
+     * setting visible so the two builds read the same, and the automatic check
+     * simply does nothing there.
+     */
+    var autoCheckUpdates: Boolean
+        get() = ui.getBoolean("auto_check_updates", true)
+        set(v) = ui.edit().putBoolean("auto_check_updates", v).apply()
+
+    /** Epoch millis of the last automatic check, so it runs at most daily. */
+    var lastUpdateCheck: Long
+        get() = ui.getLong("last_update_check", 0L)
+        set(v) = ui.edit().putLong("last_update_check", v).apply()
+
     var appIcon: String
         get() = ui.getString("app_icon", "kura") ?: "kura"
         set(v) = ui.edit().putString("app_icon", v).apply()

@@ -13,8 +13,9 @@ android {
         applicationId = "aurius.kura"
         minSdk = 26
         targetSdk = 36
-        versionCode = 16
-        versionName = "1.0.2"
+        // Both flavors share one versionCode on purpose; see the online flavor.
+        versionCode = 17
+        versionName = "1.0.3"
     }
 
     val keystorePropertiesFile = rootProject.file("keystore.properties")
@@ -73,6 +74,32 @@ android {
         }
     }
 
+    buildFeatures {
+        // NETWORK_UPDATES is read at runtime so the offline flavor never even
+        // attempts a request. The absent INTERNET permission already blocks it;
+        // the flag keeps the code path from being reached at all.
+        buildConfig = true
+    }
+
+    flavorDimensions += "network"
+
+    productFlavors {
+        create("offline") {
+            dimension = "network"
+            // No INTERNET permission: this build cannot open a socket.
+            buildConfigField("boolean", "NETWORK_UPDATES", "false")
+        }
+        create("online") {
+            dimension = "network"
+            // Same applicationId, same versionCode, same signing key as offline.
+            // Android rejects a lower versionCode as a downgrade, so giving this
+            // flavor a higher one would make returning to offline impossible --
+            // and switching by uninstalling would destroy the keystore-backed
+            // vault. Equal codes install in either direction.
+            buildConfigField("boolean", "NETWORK_UPDATES", "true")
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
@@ -95,6 +122,15 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+    testOptions {
+        unitTests {
+            // Framework methods like Log.w are stubs that throw on the JVM. The
+            // failure paths in the update checker log on the way out, so they
+            // need logging to be inert rather than fatal. No test asserts on
+            // framework behaviour.
+            isReturnDefaultValues = true
+        }
+    }
     kotlinOptions {
         jvmTarget = "17"
     }
@@ -108,4 +144,8 @@ dependencies {
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("androidx.documentfile:documentfile:1.0.1")
     testImplementation("junit:junit:4.13.2")
+    // Test-only. org.json ships as an Android stub whose methods all throw, so
+    // parsing update.json cannot be exercised on the JVM without a real
+    // implementation. Never packaged: the app uses the platform's own.
+    testImplementation("org.json:json:20231013")
 }

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The online flavor is the only build that can open a socket, and the only
+    thing it ever does with that is one HTTPS GET for update.json. Everything
+    else is identical to the offline flavor, same applicationId, same
+    versionCode, same signing key.
+
+    Clearingtext is already refused application-wide in the main manifest, so
+    this permission cannot be used to reach a plain HTTP endpoint.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+</manifest>
