@@ -11,3 +11,6 @@ screen*.png
 *.jks
 *.keystore
 keystore.properties
+# Release artifacts are published, not committed
+SHA256SUMS.txt
+update.json
