@@ -7,14 +7,14 @@ plugins {
 
 android {
     namespace = "aurius.kura"
-    compileSdk = 34
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "aurius.kura"
         minSdk = 26
-        targetSdk = 34
-        versionCode = 15
-        versionName = "1.0.0"
+        targetSdk = 36
+        versionCode = 16
+        versionName = "1.0.2"
     }
 
     val keystorePropertiesFile = rootProject.file("keystore.properties")

@@ -129,16 +129,37 @@ class CryptoVault(ctx: Context) {
      * The file lives in the app-private cache, is shredded when playback ends,
      * and the whole play directory is wiped when the vault locks. The caller
      * must shred the returned file when it is finished with it.
+     *
+     * Retries the streaming decrypt up to three times: the app-wide stale-temp
+     * sweep (BaseVaultActivity.onCreate) runs off the maintenance thread and
+     * wipes the play cache, so a decrypt started around that moment can have its
+     * output file deleted or partially invalidated mid-copy for no reason. A
+     * brief pause between attempts rides out the sweep, turning an intermittent
+     * "Failed to decrypt video" toast on a perfectly healthy vault file into a
+     * silent retry.
      */
     fun decryptVideoForPlaybackToCache(name: String): File {
         val ext = if (name.contains(".")) "." + name.substringAfterLast(".").lowercase() else ".mp4"
-        val out = File(playDir, "play_${UUID.randomUUID().toString().take(8)}$ext")
-        encFile(name).openFileInput().use { inp ->
-            out.outputStream().use { o ->
-                inp.copyTo(o)
+        val baseName = "play_${UUID.randomUUID().toString().take(8)}"
+        var lastError: Exception? = null
+        for (attempt in 1..3) {
+            val out = File(playDir, "$baseName$ext")
+            try {
+                encFile(name).openFileInput().use { inp ->
+                    out.outputStream().use { o ->
+                        inp.copyTo(o)
+                    }
+                }
+                return out
+            } catch (e: Exception) {
+                lastError = e
+                try { out.delete() } catch (_: Exception) {}
+                if (attempt < 3) {
+                    try { Thread.sleep(350L) } catch (_: InterruptedException) { break }
+                }
             }
         }
-        return out
+        throw lastError ?: java.io.IOException("Failed to decrypt $name")
     }
 
     companion object {

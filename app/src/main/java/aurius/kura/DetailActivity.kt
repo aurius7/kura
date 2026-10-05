@@ -16,6 +16,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.text.Editable
+import android.text.TextUtils
 import android.text.TextWatcher
 import android.view.GestureDetector
 import android.view.Gravity
@@ -87,7 +88,7 @@ class DetailActivity : BaseVaultActivity() {
     private var playPauseBtn: TextView? = null
     private var videoSeekBar: SeekBar? = null
     private var timeText: TextView? = null
-    private var fsToggleBtn: TextView? = null
+    private var fsToggleBtn: ImageView? = null
     private var volumeBar: SeekBar? = null
     private var muteBtn: TextView? = null
     private var isUserScrubbing = false
@@ -409,15 +410,15 @@ class DetailActivity : BaseVaultActivity() {
         }
         bar.addView(counterText, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
 
-        val fullscreenTopBtn = TextView(this).apply {
-            text = "Fullscreen"
-            textSize = 13f
-            setTextColor(prefs.textColor())
-            background = ThemeUtils.buttonBackground(prefs, false, dp(14).toFloat())
-            setPadding(dp(18), dp(8), dp(18), dp(8))
+        val fullscreenTopBtn = ImageView(this).apply {
+            setImageResource(R.drawable.ic_expand)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            background = ThemeUtils.surfaceGlass(prefs, dp(18).toFloat(), 1)
+            setPadding(dp(7), dp(7), dp(7), dp(7))
+            contentDescription = "Fullscreen"
             setOnClickListener { setFullscreen(true) }
         }
-        bar.addView(fullscreenTopBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { rightMargin = dp(10) })
+        bar.addView(fullscreenTopBtn, LinearLayout.LayoutParams(dp(36), dp(36)).apply { rightMargin = dp(10) })
 
         val exportBtn = TextView(this).apply {
             text = "Export"
@@ -465,7 +466,11 @@ class DetailActivity : BaseVaultActivity() {
             setPadding(0, 0, 0, dp(32))
         }
 
-        // Media Container: Holds the media centered vertically and horizontally
+        // Media Container: Holds the media centered vertically and horizontally.
+        // Its height is set by computeMediaContainerHeight() to fill the viewport
+        // down to the tags block, so the media renders vertically centered on
+        // screen with the Tags section starting immediately beneath it - no dead
+        // runway between the media and the Tags section.
         mediaContainer = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
             layoutParams = LinearLayout.LayoutParams(
@@ -488,7 +493,7 @@ class DetailActivity : BaseVaultActivity() {
         metaBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(16), dp(12), dp(16), dp(12))
+            setPadding(dp(16), dp(8), dp(16), dp(8))
         }
 
         info = TextView(this).apply {
@@ -541,7 +546,7 @@ class DetailActivity : BaseVaultActivity() {
             setTextColor(prefs.textColorSecondary())
             textSize = 14f
             setTypeface(null, android.graphics.Typeface.BOLD)
-            setPadding(dp(16), dp(14), dp(16), dp(8))
+            setPadding(dp(16), dp(10), dp(16), dp(8))
         }
         col.addView(tagHeader)
 
@@ -727,10 +732,13 @@ class DetailActivity : BaseVaultActivity() {
 
         // Blank runway below the tag box: guarantees there is scrollable space to lift the
         // input clear of the soft keyboard even when IME insets are not reported.
+        // Kept modest (matches the 120dp budget in computeMediaContainerHeight) so
+        // the media box gets to center on the screen instead of losing the whole
+        // area to a permanent empty strip.
         blankRunway = View(this)
         col.addView(blankRunway, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
-            dp(440)
+            dp(120)
         ))
 
         sc.addView(col)
@@ -746,8 +754,9 @@ class DetailActivity : BaseVaultActivity() {
         ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
             val sysBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
-            val topInset = if (prefs.edgeToEdge && !prefs.hideStatusBar) sysBars.top else 0
-            val bottomInset = if (prefs.edgeToEdge) sysBars.bottom else 0
+            val effectiveEdgeToEdge = Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM || prefs.edgeToEdge
+            val topInset = if (effectiveEdgeToEdge && !prefs.hideStatusBar) sysBars.top else 0
+            val bottomInset = if (effectiveEdgeToEdge) sysBars.bottom else 0
             val imeBottom = ime.bottom
 
             if (isFullscreen) {
@@ -800,10 +809,8 @@ class DetailActivity : BaseVaultActivity() {
         )
     }
 
-    private fun TextView.setFullscreenIcon(full: Boolean) {
-        setCompoundDrawablesWithIntrinsicBounds(
-            if (full) R.drawable.ic_collapse else R.drawable.ic_expand, 0, 0, 0
-        )
+    private fun ImageView.setFullscreenIcon(full: Boolean) {
+        setImageResource(if (full) R.drawable.ic_collapse else R.drawable.ic_expand)
     }
 
     private fun TextView.setVolumeIcon(muted: Boolean) {
@@ -836,29 +843,46 @@ class DetailActivity : BaseVaultActivity() {
         return targetH.coerceIn(minH, maxH)
     }
 
+    /**
+     * Sizes the media box to hug the media at its aspect-correct height (no
+     * wasted letterbox) and centres it on screen by pushing it down with a top
+     * margin of half the leftover viewport.
+     *
+     * This satisfies both layout requirements at once, and does so without
+     * depending on how many tags are listed: the media is exactly centred
+     * vertically in the visible area, and the tags/metadata block starts
+     * flush against the bottom of the media - there is no dead strip between
+     * them. A box sized to "viewport minus the tags block" instead puts the
+     * media in the upper part of the screen, which is not centred.
+     */
     private fun updateMediaContainerHeight(itemW: Int, itemH: Int) {
         if (isFullscreen) return
-        val targetH = computeMediaContainerHeight(itemW, itemH)
-        val lp = mediaContainer.layoutParams ?: LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            targetH
-        )
-        if (lp.height != targetH) {
-            lp.height = targetH
+        val boxH = computeMediaContainerHeight(itemW, itemH)
+        val top = if (viewportHeight > 300) ((viewportHeight - boxH) / 2).coerceAtLeast(0) else 0
+        val lp = mediaContainer.layoutParams as? LinearLayout.LayoutParams
+            ?: LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                boxH
+            )
+        if (lp.height != boxH || lp.topMargin != top) {
+            lp.height = boxH
+            lp.topMargin = top
             mediaContainer.layoutParams = lp
         }
     }
 
     private fun updateFullscreenDimensions() {
         val (_, realH) = getRealScreenDimensions()
-        val lp = mediaContainer.layoutParams
-        if (lp == null) {
-            mediaContainer.layoutParams = LinearLayout.LayoutParams(
+        val lp = mediaContainer.layoutParams as? LinearLayout.LayoutParams
+            ?: LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 realH
             )
-        } else if (lp.height != realH) {
+        if (lp.height != realH || lp.topMargin != 0) {
             lp.height = realH
+            // Fullscreen covers the whole window, so the centring offset from
+            // the windowed layout must not survive into it.
+            lp.topMargin = 0
             mediaContainer.layoutParams = lp
         }
         col.setPadding(0, 0, 0, 0)
@@ -1274,19 +1298,19 @@ class DetailActivity : BaseVaultActivity() {
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply { rightMargin = dp(8) })
 
-            // Timestamp (00:00 / 00:00)
+            // Timestamp (00:00 / 00:00). Weighted so it gives up width instead of
+            // pushing the mute/volume/fullscreen buttons off the right edge on
+            // narrow screens.
             val timeLbl = TextView(this).apply {
                 text = "00:00 / 00:00"
                 textSize = 11f
                 setTextColor(prefs.textColorSecondary())
                 setPadding(dp(2), dp(2), dp(4), dp(2))
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
             }
             timeText = timeLbl
-            controlsRow.addView(timeLbl)
-
-            // Spacer
-            val spacer = View(this)
-            controlsRow.addView(spacer, LinearLayout.LayoutParams(0, 1, 1f))
+            controlsRow.addView(timeLbl, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
 
             // Mute / Unmute
             val mute = TextView(this).apply {
@@ -1343,18 +1367,15 @@ class DetailActivity : BaseVaultActivity() {
                 resetAutoHide()
             }
             controlsRow.addView(mute)
-            controlsRow.addView(vBar, LinearLayout.LayoutParams(dp(75), LinearLayout.LayoutParams.WRAP_CONTENT))
+            controlsRow.addView(vBar, LinearLayout.LayoutParams(dp(56), LinearLayout.LayoutParams.WRAP_CONTENT))
 
             // Fullscreen toggle button
-            val fsBtn = TextView(this).apply {
-                text = ""
-                textSize = 11f
-                setTypeface(null, android.graphics.Typeface.BOLD)
-                setTextColor(prefs.textColor())
-                gravity = Gravity.CENTER
-                background = ThemeUtils.surfaceGlass(prefs, 12f, 1)
+            val fsBtn = ImageView(this).apply {
                 setPadding(dp(10), dp(8), dp(10), dp(8))
+                scaleType = ImageView.ScaleType.FIT_CENTER
+                background = ThemeUtils.surfaceGlass(prefs, 12f, 1)
                 setFullscreenIcon(isFullscreen)
+                contentDescription = if (isFullscreen) "Exit fullscreen" else "Fullscreen"
                 setOnClickListener {
                     setFullscreen(!isFullscreen)
                     setFullscreenIcon(isFullscreen)

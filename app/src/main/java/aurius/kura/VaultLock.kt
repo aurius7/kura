@@ -76,6 +76,10 @@ object VaultLock {
      * the unlocked vault. 300ms is still far longer than an in-app transition
      * takes to dispatch (same main-looper frame, ~16ms) while keeping the
      * window in which a quick return is missed down from 1.5s to 0.3s.
+     *
+     * onActivityStarted() clears the stamp set by onActivityStopped(), so the
+     * 300ms window is what separates a forgiven in-app transition (recreate,
+     * quick Home-and-return) from a real backgrounding that arms auto-lock.
      */
     private const val BACKGROUND_GRACE_MS = 300L
 
@@ -87,6 +91,20 @@ object VaultLock {
     fun onActivityStarted() {
         handler.removeCallbacks(backgroundRunnable)
         handler.removeCallbacks(lockRunnable)
+        // An activity coming back to the foreground means the app is no longer
+        // backgrounded, so forget the background stamp entirely. Without this,
+        // an in-app transition (e.g. Settings calling recreate() after a toggle)
+        // leaves lastBackgroundTime stamped from the stopping activity, and for
+        // an "immediate" auto-lock timeout that makes shouldLock() true the
+        // instant the recreated activity resumes - kicking the user back to the
+        // lock screen after every setting change. Clearing here restores the
+        // forgiven behaviour documented on backgroundRunnable: if the app returns
+        // before the grace runnable arms the lock, shouldLock returns false no
+        // matter how short the timeout is. A genuine background still arms the
+        // lock via the grace runnable, so "immediate" keeps locking on real
+        // Home-and-stay.
+        lastBackgroundTime = 0L
+        backgroundPrefs = null
         activeActivities++
     }
 

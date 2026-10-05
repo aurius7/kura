@@ -59,6 +59,27 @@ class SettingsActivity : BaseVaultActivity() {
         private var pendingBackupPassphrase: CharArray? = null
         private var restoreMode: Int = 2 // 0 = Force Encrypted, 1 = Force Plaintext ZIP, 2 = Auto-Detect
         private const val SUPPORT_URL = "https://buymeacoffee.com/theauriusk"
+
+        // Survives the activity being torn down by recreate(): every settings
+        // toggle rebuilds the screen, and without these the rebuild would both
+        // re-lock the vault (fixed in VaultLock) and snap the scroll back to the
+        // top even when the user was editing a row halfway down the page.
+        private var pendingScrollY = 0
+        private var restoreScrollOnCreate = false
+    }
+
+    private var settingsScroller: android.widget.ScrollView? = null
+    private var restoreSettingsScrollY = 0
+
+    /**
+     * Captures the scroll offset of the current screen before it is destroyed, so
+     * the recreated activity can jump back to the same spot instead of resetting
+     * to the top. Every setting change funnels through this.
+     */
+    override fun recreate() {
+        pendingScrollY = settingsScroller?.scrollY ?: 0
+        restoreScrollOnCreate = true
+        super.recreate()
     }
 
     private fun safePost(action: () -> Unit) {
@@ -1186,6 +1207,8 @@ class SettingsActivity : BaseVaultActivity() {
         // keystore-backed store. The degraded-keystore warning is shown on the
         // lock screen before the vault ever opens, so it is not repeated here.
         prefs.hasPin()
+        restoreSettingsScrollY = if (restoreScrollOnCreate) pendingScrollY else 0
+        restoreScrollOnCreate = false
         build()
     }
 
@@ -2179,6 +2202,12 @@ class SettingsActivity : BaseVaultActivity() {
             background = ThemeUtils.backdrop(prefs)
             addView(col)
         }
+        settingsScroller = sc
+        if (restoreSettingsScrollY > 0) {
+            val restoreY = restoreSettingsScrollY
+            sc.post { sc.scrollTo(0, restoreY) }
+            restoreSettingsScrollY = 0
+        }
 
         val root = FrameLayout(this).apply {
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
@@ -2190,8 +2219,9 @@ class SettingsActivity : BaseVaultActivity() {
 
         ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
             val sysBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            val topInset = if (prefs.edgeToEdge && !prefs.hideStatusBar) sysBars.top else 0
-            val bottomInset = if (prefs.edgeToEdge) sysBars.bottom else 0
+            val effectiveEdgeToEdge = Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM || prefs.edgeToEdge
+            val topInset = if (effectiveEdgeToEdge && !prefs.hideStatusBar) sysBars.top else 0
+            val bottomInset = if (effectiveEdgeToEdge) sysBars.bottom else 0
             col.setPadding(28, topInset + 28, 28, 72 + bottomInset)
             insets
         }
