@@ -1948,14 +1948,19 @@ class SettingsActivity : BaseVaultActivity() {
             negativeBtnText = "Close"
         ) { container, _ ->
             val items = listOf(
-                "100% Offline Architecture" to "Zero network permissions in AndroidManifest. No analytics, tracking, or remote connections.",
+                "No Network Access" to if (BuildConfig.NETWORK_UPDATES)
+                    "This build declares INTERNET, used only to ask the release page whether a newer version exists. No analytics, no tracking, no accounts, and nothing else talks to a network. The offline build declares no INTERNET permission at all."
+                else
+                    "This build declares no INTERNET permission and cannot open a network connection. No analytics, tracking, or remote connections.",
                 "AES-256-GCM Encryption" to "Hardware-backed keystore keys with authenticated Galois/Counter Mode encryption at rest.",
                 "CE Protected Sandbox" to "Credential-Encrypted app sandbox with chmod 0600 file permissions.",
                 "Memory Zeroization" to "Sensitive plaintext byte arrays and passphrases in RAM are overwritten with zeros immediately after decode.",
                 "Multi-Pass File Shredding" to "Deleted records are overwritten with pseudo-random garbage before unlinking to prevent flash recovery.",
                 "Coercion Decoy Vault" to "An independent second PIN opens a completely isolated decoy vault.",
                 "Brute-Force Lockout" to "Keypad digit scrambling and mandatory 24-hour lockout after 3 consecutive failed attempts.",
-                "Optional Support Link" to "Kura holds no network permission and never makes requests. Tapping Support opens an external browser of your choice, which then loads the donation page."
+                "Optional Support Link" to "Tapping Support opens an external browser of your choice, which then loads the donation page. Kura itself makes no request for it.",
+                "Install Permission" to "REQUEST_INSTALL_PACKAGES is declared in both builds. Android has no silent install, so updating means showing the system installer and letting you confirm. The permission grants no data access and no network access.",
+                "Updates Are Verified" to "Before any installer opens, the file's version, SHA-256 and signing certificate are checked against what is running. A mismatch is refused and says which check failed."
             )
             for ((heading, detail) in items) {
                 val box = LinearLayout(this).apply {
@@ -2381,7 +2386,7 @@ class SettingsActivity : BaseVaultActivity() {
         val updCard = card(col)
         addUpdatesCard(updCard)
 
-        settingRow(helpCard, "🛡️ Security Architecture & Privacy Policy", "Zero-permission offline design & AES-256-GCM encryption", "View Policy") {
+        settingRow(helpCard, "🛡️ Security Architecture & Privacy Policy", if (BuildConfig.NETWORK_UPDATES) "AES-256-GCM, verified updates & no analytics" else "No network permission & AES-256-GCM encryption", "View Policy") {
             showSecurityPolicyDialog()
         }
 
