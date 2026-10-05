@@ -4,16 +4,33 @@
 
 **An offline encrypted media vault for Android.**
 
-No network permission. No ads. No tracking. No accounts.
+No ads. No tracking. No accounts. An offline build that declares no `INTERNET`
+permission at all.
 
 </div>
 
 ---
 
 Kura is a local-first vault for photos, videos, and GIFs. Media is encrypted
-at rest with AES-256-GCM using Android Keystore-managed keys, and the app
-declares no `INTERNET` permission, so it cannot open a network connection even
-if it wanted to.
+at rest with AES-256-GCM using Android Keystore-managed keys.
+
+Two builds are published from the same source, both `versionCode 17`, both signed
+with the same key, both reading and writing the same vault:
+
+| | `kura_v1.0.3.apk` | `kura_v1.0.3-online.apk` |
+|---|---|---|
+| `INTERNET` | **not declared** | declared |
+| Network use | impossible | one request: is there a newer version? |
+| Updating | point Kura at an APK you already have | automatic daily check, download on request |
+
+Switching between them is an ordinary update, not a reinstall, because the
+application id, version code and signing key are identical. Nothing else differs.
+
+Every update is checked before an installer opens: the `versionCode` must be
+higher, the SHA-256 must match the published `update.json`, and the file's
+signing certificate must equal the one the running app is signed with. Android
+has no silent install for an ordinary app, so an update always ends at a system
+prompt you approve.
 
 > **Never uninstall Kura to upgrade or reinstall it.** The vault key lives in
 > the Android Keystore and is destroyed with the app, so removing Kura destroys
@@ -68,14 +85,21 @@ privately, and for what does not count as one.
 - **Independent lockout** — unlocking with the decoy PIN does not reset the real
   vault's brute-force counter, so an attacker cannot clear it by switching PINs.
 
-**Zero permissions**
+**Permissions**
 
-The only permission Kura declares is `USE_BIOMETRIC`, and it is used solely to
-unlock the vault. There is no `INTERNET` permission, no analytics, and no
-third-party SDKs. You can verify this yourself:
+The offline build declares `USE_BIOMETRIC`, used solely to unlock the vault, and
+`REQUEST_INSTALL_PACKAGES`, which grants no data access and no network access. It
+exists only because Android has no silent install, so putting an APK in front of
+the system installer requires it.
+
+The online build adds `INTERNET`, used for a single request to the release page
+and nothing else. Cleartext traffic is refused application-wide in both builds.
+
+There are no analytics and no third-party SDKs. You can verify this yourself:
 
 ```bash
-aapt dump permissions kura.apk
+aapt dump permissions kura_v1.0.3.apk          # no INTERNET
+aapt dump permissions kura_v1.0.3-online.apk   # INTERNET present
 ```
 
 **Organization**

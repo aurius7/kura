@@ -64,9 +64,16 @@ response:
 - **A 4-digit PIN is weak against offline attack.** If an attacker has your
   encrypted files and can run code as you, they can try every PIN. This is
   documented in the README's known gaps.
-- **There is no network access.** Kura declares no `INTERNET` permission, has no
-  analytics, and contains no third-party SDKs. Being unable to sync, back up
-  automatically, or receive updates is the intended trade.
+- **There is no network access in the default build.** The offline APK declares
+  no `INTERNET` permission, so it cannot open a connection at all. There are no
+  analytics and no third-party SDKs. Being unable to sync or back up
+  automatically is the intended trade.
+- **A second build does declare `INTERNET`.** `kura_v1.0.3-online.apk` adds it for
+  one request: asking the release page whether a newer version exists, then
+  downloading one if you agree. It contacts no other host, sends nothing about
+  the vault, and has no analytics. If you want the guarantee rather than the
+  promise, install the offline build; the two are otherwise identical and either
+  can be updated to the other without losing media.
 - **Backups use PBKDF2, not Argon2id.** A deliberate, documented choice, not a
   broken cipher.
 - **Deleted files may survive on flash.** `secureShred` zeroes a file once before
