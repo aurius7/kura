@@ -136,7 +136,7 @@ class Prefs(ctx: Context) {
     /**
      * Whether to look for a new version when Kura opens.
      *
-     * Only the online flavor can act on this; the offline build keeps the
+     * Only the build with INTERNET can act on this; the other keeps the
      * setting visible so the two builds read the same, and the automatic check
      * simply does nothing there.
      */

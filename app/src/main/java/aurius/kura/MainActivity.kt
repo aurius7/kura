@@ -1347,8 +1347,11 @@ class MainActivity : BaseVaultActivity() {
 
         bg.execute {
             prefs.lastUpdateCheck = System.currentTimeMillis()
+            // A silent failure here is deliberate: the daily check has nowhere to
+            // report to. Settings -> Check now is where a failure is explained.
             val body = UpdateChecker.readSmall(UpdateChecker.UPDATE_JSON_URL)
-            val release = body?.let { UpdateChecker.parseRelease(it) } ?: return@execute
+            val release = (body as? UpdateChecker.Fetch.Text)
+                ?.let { UpdateChecker.parseRelease(it.body) } ?: return@execute
             val current = try {
                 packageManager.getPackageInfo(packageName, 0).versionCode
             } catch (_: Exception) {
@@ -1384,9 +1387,19 @@ class MainActivity : BaseVaultActivity() {
         android.widget.Toast.makeText(this, "Downloading Kura ${release.versionName}...", android.widget.Toast.LENGTH_SHORT).show()
         bg.execute {
             val staged = java.io.File(UpdateChecker.stagingDir(this), "kura-${release.versionCode}.apk")
-            val ok = UpdateChecker.download(asset.apkUrl, staged)
-            val verdict = if (!ok) UpdateChecker.Verdict.Unreadable else UpdateChecker.verify(
-                this, staged, installedVersionCode, asset.sha256, UpdateChecker.ownCertHex(this)
+            val fetched = UpdateChecker.download(asset.apkUrl, staged)
+            if (fetched is UpdateChecker.Fetch.Failed) {
+                mainHandler.post {
+                    android.widget.Toast.makeText(
+                        this, fetched.hint + " (" + fetched.detail + ")",
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                }
+                return@execute
+            }
+            val verdict = UpdateChecker.verify(
+                this, staged, installedVersionCode, asset.sha256, UpdateChecker.ownCertHex(this),
+                asset.sizeBytes
             )
             mainHandler.post {
                 when (verdict) {
@@ -1400,6 +1413,8 @@ class MainActivity : BaseVaultActivity() {
                             ).show()
                             ApkInstaller.openInstallPermissionSettings(this)
                         }
+                    UpdateChecker.Verdict.BadSize ->
+                        android.widget.Toast.makeText(this, "Download was incomplete, so it was not offered", android.widget.Toast.LENGTH_LONG).show()
                     UpdateChecker.Verdict.BadHash ->
                         android.widget.Toast.makeText(this, "Download did not match the published checksum", android.widget.Toast.LENGTH_LONG).show()
                     UpdateChecker.Verdict.WrongSigner ->

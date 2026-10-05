@@ -233,7 +233,7 @@ class SettingsActivity : BaseVaultActivity() {
         }
     }
 
-    /** A downloaded APK the user points Kura at, for the offline update path. */
+    /** A downloaded APK the user points Kura at, for updating without a network. */
     private val pickApkLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@registerForActivityResult
         toast("Checking the file...")
@@ -1786,7 +1786,7 @@ class SettingsActivity : BaseVaultActivity() {
      * The Updates card.
      *
      * What it can do depends on the flavor, and it says so rather than showing a
-     * toggle that quietly does nothing. The offline build cannot reach the
+     * toggle that quietly does nothing. The build without INTERNET cannot reach the
      * network, so its automatic check is inert and the only way in is pointing
      * Kura at an APK that is already on the device. Both flavors can install a
      * verified APK, and neither can install it silently.
@@ -1840,6 +1840,23 @@ class SettingsActivity : BaseVaultActivity() {
 
         settingRow(
             parent,
+            "🏷️ This build",
+            if (online)
+                "Declares the INTERNET permission, used only to ask whether a newer version exists."
+            else
+                "Declares no INTERNET permission and cannot open a network connection.",
+            "Flavor"
+        ) {
+            copyToClipboard(
+                "Kura build",
+                "versionName=${installedVersionName()} versionCode=${installedVersionCode()} flavor=" +
+                    if (online) UpdateChecker.FLAVOR_NETWORK else UpdateChecker.FLAVOR_STANDARD
+            )
+            toast("Build details copied")
+        }
+
+        settingRow(
+            parent,
             "📝 Installed version",
             "v${installedVersionName()}  ·  versionCode ${installedVersionCode()}",
             "Copy key"
@@ -1862,20 +1879,28 @@ class SettingsActivity : BaseVaultActivity() {
         }
         toast("Checking for updates...")
         bg.execute {
-            val body = UpdateChecker.readSmall(UpdateChecker.UPDATE_JSON_URL)
-            val release = body?.let { UpdateChecker.parseRelease(it) }
+            val fetched = UpdateChecker.readSmall(UpdateChecker.UPDATE_JSON_URL)
+            val release = (fetched as? UpdateChecker.Fetch.Text)?.let { UpdateChecker.parseRelease(it.body) }
             val current = installedVersionCode()
             val offer = release
                 ?.takeIf { UpdateChecker.isNewer(current, it.versionCode) }
                 ?.takeIf { it.forCurrentFlavor() != null }
             mainHandler.post {
                 prefs.lastUpdateCheck = System.currentTimeMillis()
-                if (release == null) {
-                    showUpdateProblem("Could not read the update information. Check the network and try again.")
-                } else if (offer == null) {
-                    showUpdateProblem("Kura ${installedVersionName()} is the latest version.")
-                } else {
-                    offerDownload(offer)
+                when {
+                    // Name the failure. "Check the network" is a guess, and on a
+                    // phone the guess is usually the wrong one.
+                    fetched is UpdateChecker.Fetch.Failed ->
+                        showUpdateProblem("${fetched.hint}\n\n${fetched.detail}")
+                    release == null ->
+                        showUpdateProblem(
+                            "The release page answered, but the update information in it " +
+                                "could not be understood. That is a problem with what is " +
+                                "published, not with this device."
+                        )
+                    offer == null ->
+                        showUpdateProblem("Kura ${installedVersionName()} is the latest version.")
+                    else -> offerDownload(offer)
                 }
             }
         }
@@ -1893,11 +1918,18 @@ class SettingsActivity : BaseVaultActivity() {
         toast("Downloading Kura ${release.versionName}...")
         bg.execute {
             val staged = File(UpdateChecker.stagingDir(this), "kura-${release.versionCode}.apk")
-            val ok = UpdateChecker.download(asset.apkUrl, staged)
-            val verdict = if (!ok) UpdateChecker.Verdict.Unreadable else UpdateChecker.verify(
-                this, staged, installedVersionCode(), asset.sha256, UpdateChecker.ownCertHex(this)
-            )
-            mainHandler.post { onApkChecked(verdict, release) }
+            val fetched = UpdateChecker.download(asset.apkUrl, staged)
+            mainHandler.post {
+                if (fetched is UpdateChecker.Fetch.Failed) {
+                    showUpdateProblem("${fetched.hint}\n\n${fetched.detail}")
+                } else {
+                    val verdict = UpdateChecker.verify(
+                        this, staged, installedVersionCode(), asset.sha256,
+                        UpdateChecker.ownCertHex(this), asset.sizeBytes
+                    )
+                    onApkChecked(verdict, release)
+                }
+            }
         }
     }
 
@@ -1915,6 +1947,8 @@ class SettingsActivity : BaseVaultActivity() {
             }
             UpdateChecker.Verdict.NotNewer ->
                 showUpdateProblem("That file is not newer than the version you are running.")
+            UpdateChecker.Verdict.BadSize ->
+                showUpdateProblem("That file is not the size the release published, so the transfer was cut short and it was refused.")
             UpdateChecker.Verdict.BadHash ->
                 showUpdateProblem("That file does not match the published checksum, so it was refused. It may be truncated or altered.")
             UpdateChecker.Verdict.WrongSigner ->
@@ -1944,12 +1978,12 @@ class SettingsActivity : BaseVaultActivity() {
     private fun showSecurityPolicyDialog() {
         showBlackDialog(
             title = "Security & Architecture",
-            subtitle = "Offline-first cryptography & hardening details",
+            subtitle = "Cryptography & hardening details",
             negativeBtnText = "Close"
         ) { container, _ ->
             val items = listOf(
                 "No Network Access" to if (BuildConfig.NETWORK_UPDATES)
-                    "This build declares INTERNET, used only to ask the release page whether a newer version exists. No analytics, no tracking, no accounts, and nothing else talks to a network. The offline build declares no INTERNET permission at all."
+                    "This build declares INTERNET, used only to ask the release page whether a newer version exists. No analytics, no tracking, no accounts, and nothing else talks to a network. The other build declares no INTERNET permission at all."
                 else
                     "This build declares no INTERNET permission and cannot open a network connection. No analytics, tracking, or remote connections.",
                 "AES-256-GCM Encryption" to "Hardware-backed keystore keys with authenticated Galois/Counter Mode encryption at rest.",
@@ -2008,7 +2042,7 @@ class SettingsActivity : BaseVaultActivity() {
             setTypeface(null, android.graphics.Typeface.BOLD)
         })
         col.addView(TextView(this).apply {
-            text = "Offline • AES-256-GCM Vault • Fully Customizable"
+            text = "AES-256-GCM Vault • Fully Customizable"
             textSize = 12f
             setTextColor(prefs.textColorSecondary())
             setPadding(0, 4, 0, 12)

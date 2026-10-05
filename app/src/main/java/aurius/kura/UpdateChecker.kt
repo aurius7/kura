@@ -6,10 +6,16 @@ import android.net.Uri
 import android.os.Build
 import android.util.Log
 import java.io.File
+import java.io.FileNotFoundException
+import java.io.IOException
 import java.io.InputStream
 import java.net.HttpURLConnection
+import java.net.SocketTimeoutException
 import java.net.URL
+import java.net.UnknownHostException
 import java.security.MessageDigest
+
+import javax.net.ssl.SSLException
 import java.util.concurrent.Executor
 
 /**
@@ -32,7 +38,7 @@ data class ReleaseInfo(
  * One downloadable build.
  *
  * A release publishes an entry per flavor and a build only ever accepts its own.
- * Handing the networked APK to someone who installed the offline build would
+ * Handing the networked APK to someone who installed the standard build would
  * silently add a network permission to their app, which is the one thing that
  * build exists to avoid.
  */
@@ -71,8 +77,9 @@ object UpdateChecker {
         val code = o.getInt("versionCode")
         val flavorsObj = o.getJSONObject("flavors")
         val flavors = mutableMapOf<String, ReleaseAsset>()
-        for (key in listOf(FLAVOR_OFFLINE, FLAVOR_ONLINE)) {
-            if (!flavorsObj.has(key)) continue
+        val names = flavorsObj.keys()
+        while (names.hasNext()) {
+            val key = names.next()
             val f = flavorsObj.getJSONObject(key)
             val apk = f.optString("apkUrl", "")
             val sha = f.optString("sha256", "").lowercase()
@@ -96,8 +103,17 @@ object UpdateChecker {
         null
     }
 
-    const val FLAVOR_OFFLINE = "offline"
-    const val FLAVOR_ONLINE = "online"
+    const val FLAVOR_STANDARD = "standard"
+    const val FLAVOR_NETWORK = "network"
+
+    /**
+     * Keys published before the rename. v1.0.3 and earlier look themselves up by
+     * their own name, so an update.json without these is invisible to an app
+     * that has not updated yet -- the one release where that matters most is the
+     * release that would have told them to. Kept until nothing pre-rename is
+     * worth keeping updatable.
+     */
+    val LEGACY_FLAVORS = listOf("offline", "online")
 
     /**
      * A release is offered only when it is genuinely newer. Equal is not newer:
@@ -178,6 +194,70 @@ object UpdateChecker {
     }
 
     /**
+     * What a fetch produced. Failures carry a reason instead of a null, because
+     * a null turned "the release page could not be read" into a guess about the
+     * user's network, and this code has to be debuggable from a phone with no
+     * terminal attached to it.
+     */
+    sealed class Fetch {
+        data class Text(val body: String) : Fetch()
+        data class Bytes(val file: File, val count: Long) : Fetch()
+        data class Failed(val detail: String, val hint: String) : Fetch()
+    }
+
+    private const val MAX_HOPS = 5
+
+    /**
+     * Opens [url], following redirects by hand.
+     *
+     * Automatic following is switched off on purpose. GitHub answers every
+     * release asset with a 302 to a CDN host, so the redirect chain is the
+     * normal case rather than an edge case, and doing it here means the chain is
+     * ours to inspect and report instead of the platform's to fail silently.
+     * Relative Location headers are resolved against the current URL.
+     */
+    private fun openFollowing(url: String, timeoutMs: Int, accept: String): HttpURLConnection {
+        var current = url
+        repeat(MAX_HOPS) {
+            val conn = (URL(current).openConnection() as HttpURLConnection).apply {
+                connectTimeout = timeoutMs
+                readTimeout = timeoutMs
+                instanceFollowRedirects = false
+                requestMethod = "GET"
+                setRequestProperty("Accept", accept)
+                setRequestProperty("User-Agent", "Kura/$TAG")
+            }
+            val code = conn.responseCode
+            if (code !in 300..399) return conn
+            val location = conn.getHeaderField("Location")
+            conn.disconnect()
+            if (location.isNullOrBlank()) throw IOException("HTTP $code with no Location header")
+            current = URL(URL(current), location).toString()
+        }
+        throw IOException("more than $MAX_HOPS redirects")
+    }
+
+    /** Turns an exception into something a user can act on. */
+    private fun failed(url: String, e: Exception): Fetch.Failed {
+        val detail = "${e.javaClass.simpleName}: ${e.message ?: "no message"}"
+        val hint = when (e) {
+            is SSLException ->
+                "The TLS handshake failed. Either the connection was intercepted or this " +
+                    "device's TLS is too old or misconfigured for the release host."
+            is UnknownHostException ->
+                "The name did not resolve, so this build could not reach the release host."
+            is SocketTimeoutException ->
+                "The connection timed out before the server answered."
+            is FileNotFoundException ->
+                "The server has no file at that address. The release may not be published yet."
+            else ->
+                "The connection to the release host failed."
+        }
+        Log.w(TAG, "GET $url failed: $detail")
+        return Fetch.Failed(detail, hint)
+    }
+
+    /**
      * Fetches [url] into the staging directory. Used for the check itself and
      * for the download; both go through here so there is one place that talks to
      * the network at all.
@@ -185,47 +265,46 @@ object UpdateChecker {
      * Only ever called when [BuildConfig.NETWORK_UPDATES] is true, which is only
      * true for the flavor that declares INTERNET.
      */
-    fun download(url: String, dest: File, timeoutMs: Int = 20_000): Boolean {
+    fun download(url: String, dest: File, timeoutMs: Int = 20_000): Fetch {
         var conn: HttpURLConnection? = null
         return try {
-            conn = (URL(url).openConnection() as HttpURLConnection).apply {
-                connectTimeout = timeoutMs
-                readTimeout = timeoutMs
-                instanceFollowRedirects = true
-                requestMethod = "GET"
-                setRequestProperty("Accept", "application/json, application/octet-stream")
-            }
-            if (conn.responseCode !in 200..299) {
-                Log.w(TAG, "GET $url returned ${conn.responseCode}")
-                return false
+            conn = openFollowing(url, timeoutMs, "application/octet-stream, */*")
+            val code = conn.responseCode
+            if (code !in 200..299) {
+                Log.w(TAG, "GET $url returned $code")
+                return Fetch.Failed("HTTP $code from $url", "The server refused the request.")
             }
             val tmp = File(dest.absolutePath + ".part")
+            tmp.parentFile?.mkdirs()
             conn.inputStream.use { ins -> tmp.outputStream().use { out -> ins.copyTo(out, 64 * 1024) } }
             // Rename only once the whole body landed, so an interrupted download
             // can never be mistaken for a complete file.
             if (dest.exists()) dest.delete()
-            tmp.renameTo(dest)
-        } catch (_: Exception) {
-            Log.w(TAG, "GET $url failed")
-            false
+            if (!tmp.renameTo(dest)) {
+                tmp.delete()
+                return Fetch.Failed("could not move the download into place", "The file could not be written to storage.")
+            }
+            Fetch.Bytes(dest, dest.length())
+        } catch (e: Exception) {
+            File(dest.absolutePath + ".part").delete()
+            failed(url, e)
         } finally {
             conn?.disconnect()
         }
     }
 
-    fun readSmall(url: String, timeoutMs: Int = 10_000): String? {
+    fun readSmall(url: String, timeoutMs: Int = 15_000): Fetch {
         var conn: HttpURLConnection? = null
         return try {
-            conn = (URL(url).openConnection() as HttpURLConnection).apply {
-                connectTimeout = timeoutMs
-                readTimeout = timeoutMs
-                instanceFollowRedirects = true
-                requestMethod = "GET"
+            conn = openFollowing(url, timeoutMs, "application/json, text/plain")
+            val code = conn.responseCode
+            if (code !in 200..299) {
+                Log.w(TAG, "GET $url returned $code")
+                return Fetch.Failed("HTTP $code from $url", "The server refused the request.")
             }
-            if (conn.responseCode !in 200..299) return null
-            conn.inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
-        } catch (_: Exception) {
-            null
+            Fetch.Text(conn.inputStream.use { it.readBytes().toString(Charsets.UTF_8) })
+        } catch (e: Exception) {
+            failed(url, e)
         } finally {
             conn?.disconnect()
         }
@@ -254,6 +333,7 @@ object UpdateChecker {
         data class Ok(val file: File, val versionName: String) : Verdict()
         data object NotNewer : Verdict()
         data object BadHash : Verdict()
+        data object BadSize : Verdict()
         data object WrongSigner : Verdict()
         data object Unreadable : Verdict()
     }
@@ -268,11 +348,15 @@ object UpdateChecker {
         file: File,
         installedCode: Int,
         expectedSha: String?,
-        expectedCert: String?
+        expectedCert: String?,
+        expectedSize: Long? = null
     ): Verdict {
         if (!file.exists() || file.length() == 0L) return Verdict.Unreadable
         val code = versionCodeOfApk(ctx, file) ?: return Verdict.Unreadable
         if (!isNewer(installedCode, code)) return Verdict.NotNewer
+        // Compared before the digest, because it is the cheap rejection: a
+        // transfer cut short fails here instead of after hashing 3 MB.
+        if (expectedSize != null && file.length() != expectedSize) return Verdict.BadSize
         if (expectedSha != null && !sameCert(sha256OfFile(file) ?: return Verdict.Unreadable, expectedSha)) {
             return Verdict.BadHash
         }
@@ -305,4 +389,4 @@ object UpdateChecker {
  * importing from inside the object.
  */
 fun ReleaseInfo.forCurrentFlavor(): ReleaseAsset? =
-    flavors[if (BuildConfig.NETWORK_UPDATES) UpdateChecker.FLAVOR_ONLINE else UpdateChecker.FLAVOR_OFFLINE]
+    flavors[if (BuildConfig.NETWORK_UPDATES) UpdateChecker.FLAVOR_NETWORK else UpdateChecker.FLAVOR_STANDARD]

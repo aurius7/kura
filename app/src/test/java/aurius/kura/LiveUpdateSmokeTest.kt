@@ -23,10 +23,10 @@ class LiveUpdateSmokeTest {
     fun testLiveReleaseMetadataIsReadableAndNewer() {
         live()
         val body = UpdateChecker.readSmall(UpdateChecker.UPDATE_JSON_URL)
-        assertNotNull("update.json must be reachable at the stable URL", body)
-        println("live: fetched ${body!!.length} bytes from ${UpdateChecker.UPDATE_JSON_URL}")
+        assertTrue("update.json must be reachable, got $body", body is UpdateChecker.Fetch.Text)
+        println("live: fetched ${(body as UpdateChecker.Fetch.Text).body.length} bytes from ${UpdateChecker.UPDATE_JSON_URL}")
 
-        val release = UpdateChecker.parseRelease(body)
+        val release = UpdateChecker.parseRelease(body.body)
         assertNotNull("published update.json must parse", release)
         println("live: parsed versionName=${release!!.versionName} versionCode=${release.versionCode}")
 
@@ -43,11 +43,13 @@ class LiveUpdateSmokeTest {
     @Test
     fun testLiveApkDownloadsAndPassesTheRealHashCheck() {
         live()
-        val release = UpdateChecker.parseRelease(UpdateChecker.readSmall(UpdateChecker.UPDATE_JSON_URL)!!)!!
+        val release = UpdateChecker.parseRelease(
+            (UpdateChecker.readSmall(UpdateChecker.UPDATE_JSON_URL) as UpdateChecker.Fetch.Text).body
+        )!!
         val asset = release.forCurrentFlavor()!!
         val dest = File.createTempFile("kura-live", ".apk")
 
-        assertTrue("asset must download", UpdateChecker.download(asset.apkUrl, dest))
+        assertTrue("asset must download", UpdateChecker.download(asset.apkUrl, dest) is UpdateChecker.Fetch.Bytes)
         println("live: downloaded ${dest.length()} bytes, metadata says ${asset.sizeBytes}")
 
         assertFalse("the .part file must be renamed, not left behind", File(dest.absolutePath + ".part").exists())
@@ -73,14 +75,16 @@ class LiveUpdateSmokeTest {
     @Test
     fun testBothFlavorsAreReachableAndDistinct() {
         live()
-        val release = UpdateChecker.parseRelease(UpdateChecker.readSmall(UpdateChecker.UPDATE_JSON_URL)!!)!!
-        val offline = release.flavors[UpdateChecker.FLAVOR_OFFLINE]!!
-        val online = release.flavors[UpdateChecker.FLAVOR_ONLINE]!!
-        assertFalse("the two builds must not be the same file", offline.sha256 == online.sha256)
+        val release = UpdateChecker.parseRelease(
+            (UpdateChecker.readSmall(UpdateChecker.UPDATE_JSON_URL) as UpdateChecker.Fetch.Text).body
+        )!!
+        val standard = release.flavors[UpdateChecker.FLAVOR_STANDARD]!!
+        val network = release.flavors[UpdateChecker.FLAVOR_NETWORK]!!
+        assertFalse("the two builds must not be the same file", standard.sha256 == network.sha256)
 
-        for ((name, asset) in listOf("offline" to offline, "online" to online)) {
+        for ((name, asset) in listOf("standard" to standard, "network" to network)) {
             val dest = File.createTempFile("kura-$name", ".apk")
-            assertTrue("$name must download", UpdateChecker.download(asset.apkUrl, dest))
+            assertTrue("$name must download", UpdateChecker.download(asset.apkUrl, dest) is UpdateChecker.Fetch.Bytes)
             assertTrue("$name must match its published digest", UpdateChecker.sameCert(UpdateChecker.sha256OfFile(dest)!!, asset.sha256))
             println("live: $name ok, ${dest.length()} bytes, ${asset.sha256.take(16)}...")
             dest.delete()

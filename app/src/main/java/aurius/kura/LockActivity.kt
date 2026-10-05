@@ -304,7 +304,7 @@ class LockActivity : AppCompatActivity() {
         root.addView(title)
 
         val subtitle = TextView(this).apply {
-            text = "Offline • AES-256-GCM Encrypted Vault"
+            text = "AES-256-GCM Encrypted Vault"
             gravity = Gravity.CENTER
             setTextColor(prefs.textColorSecondary())
             textSize = 12f
@@ -402,7 +402,7 @@ class LockActivity : AppCompatActivity() {
         root.addView(pinSection, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
 
         val hint = TextView(this).apply {
-            text = "Offline • No Internet Permission • Local Security"
+            text = "No Internet Permission • Local Security"
             gravity = Gravity.CENTER
             setTextColor(prefs.textColorSecondary())
             textSize = 11f

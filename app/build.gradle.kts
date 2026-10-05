@@ -14,8 +14,8 @@ android {
         minSdk = 26
         targetSdk = 36
         // Both flavors share one versionCode on purpose; see the online flavor.
-        versionCode = 17
-        versionName = "1.0.3"
+        versionCode = 18
+        versionName = "1.0.4"
     }
 
     val keystorePropertiesFile = rootProject.file("keystore.properties")
@@ -75,25 +75,25 @@ android {
     }
 
     buildFeatures {
-        // NETWORK_UPDATES is read at runtime so the offline flavor never even
-        // attempts a request. The absent INTERNET permission already blocks it;
-        // the flag keeps the code path from being reached at all.
+        // NETWORK_UPDATES is read at runtime so the build without the INTERNET
+        // permission never even attempts a request. The absent permission already
+        // blocks it; the flag keeps the code path from being reached at all.
         buildConfig = true
     }
 
-    flavorDimensions += "network"
+    flavorDimensions += "variant"
 
     productFlavors {
-        create("offline") {
-            dimension = "network"
-            // No INTERNET permission: this build cannot open a socket.
+        create("standard") {
+            dimension = "variant"
+            // Declares no INTERNET permission, so it cannot open a socket.
             buildConfigField("boolean", "NETWORK_UPDATES", "false")
         }
-        create("online") {
-            dimension = "network"
-            // Same applicationId, same versionCode, same signing key as offline.
+        create("network") {
+            dimension = "variant"
+            // Same applicationId, same versionCode, same signing key as standard.
             // Android rejects a lower versionCode as a downgrade, so giving this
-            // flavor a higher one would make returning to offline impossible --
+            // flavor a higher one would make going back to standard impossible --
             // and switching by uninstalling would destroy the keystore-backed
             // vault. Equal codes install in either direction.
             buildConfigField("boolean", "NETWORK_UPDATES", "true")

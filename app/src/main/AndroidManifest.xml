@@ -10,7 +10,7 @@
         installer, which is how an update is installed at all: Android has no
         silent install, so the user always confirms. It grants no data access and
         no network access; it only lets Kura show the install prompt. The
-        offline flavor needs it for an APK the user picked from storage, and the
+        standard flavor needs it for an APK the user picked from storage, and the
         online flavor for one it fetched itself.
     -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />

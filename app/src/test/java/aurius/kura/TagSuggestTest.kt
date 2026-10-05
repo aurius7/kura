@@ -229,8 +229,8 @@ class UpdateCheckerTest {
     private val good = """
         {"versionName":"1.0.3","versionCode":17,
          "flavors":{
-           "offline":{"apkUrl":"https://example.invalid/kura.apk","sha256":"$a","sizeBytes":2961972},
-           "online":{"apkUrl":"https://example.invalid/kura-online.apk","sha256":"$b","sizeBytes":2964686}},
+           "standard":{"apkUrl":"https://example.invalid/kura.apk","sha256":"$a","sizeBytes":2961972},
+           "network":{"apkUrl":"https://example.invalid/kura-network.apk","sha256":"$b","sizeBytes":2964686}},
          "notesUrl":"https://example.invalid/notes"}
     """.trimIndent()
 
@@ -240,8 +240,8 @@ class UpdateCheckerTest {
         assertEquals("1.0.3", r.versionName)
         assertEquals(17, r.versionCode)
         assertEquals(2, r.flavors.size)
-        assertEquals("https://example.invalid/kura.apk", r.flavors["offline"]!!.apkUrl)
-        assertEquals(2964686L, r.flavors["online"]!!.sizeBytes)
+        assertEquals("https://example.invalid/kura.apk", r.flavors["standard"]!!.apkUrl)
+        assertEquals(2964686L, r.flavors["network"]!!.sizeBytes)
     }
 
     @Test
@@ -250,8 +250,9 @@ class UpdateCheckerTest {
         val mine = r.forCurrentFlavor()
         assertNotNull("this build must find its own entry", mine)
         assertEquals(64, mine!!.sha256.length)
-        // The whole point: an offline build must never be handed the networked APK.
-        assertNotEquals(r.flavors["offline"]!!.sha256, r.flavors["online"]!!.sha256)
+        // The whole point: the build without INTERNET must never be handed the
+        // APK that declares it.
+        assertNotEquals(r.flavors["standard"]!!.sha256, r.flavors["network"]!!.sha256)
     }
 
     @Test
@@ -267,9 +268,22 @@ class UpdateCheckerTest {
     fun testRejectsAnEntryWithoutAUsableDigest() {
         assertNull(
             UpdateChecker.parseRelease(
-                """{"versionCode":17,"flavors":{"offline":{"apkUrl":"x","sha256":"abc"}}}"""
+                """{"versionCode":17,"flavors":{"standard":{"apkUrl":"x","sha256":"abc"}}}"""
             )
         )
+    }
+
+    @Test
+    fun testKeysFromBeforeTheRenameStillParse() {
+        // v1.0.3 looks itself up by its old name. Publishing without these would
+        // hide the one release that would have told those apps to update.
+        val r = UpdateChecker.parseRelease(
+            """{"versionCode":18,"flavors":{"offline":{"apkUrl":"a","sha256":"$a"},
+               "online":{"apkUrl":"b","sha256":"$b"}}}"""
+        )!!
+        assertEquals(2, r.flavors.size)
+        assertTrue(r.flavors.containsKey("offline"))
+        assertTrue(r.flavors.containsKey("online"))
     }
 
     @Test
