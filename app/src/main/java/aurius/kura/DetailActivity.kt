@@ -24,6 +24,7 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewConfiguration
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.inputmethod.EditorInfo
@@ -34,6 +35,7 @@ import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.ProgressBar
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
@@ -46,7 +48,9 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import java.io.File
 import java.nio.ByteBuffer
+
 import java.util.concurrent.Executors
+import kotlin.math.abs
 
 class DetailActivity : BaseVaultActivity() {
     private lateinit var db: BooruDb
@@ -94,10 +98,19 @@ class DetailActivity : BaseVaultActivity() {
     private var muteBtn: TextView? = null
     private var isUserScrubbing = false
 
+    // Horizontal-swipe arbitration against the page ScrollView.
+    private var gestureStartX = 0f
+    private var gestureStartY = 0f
+    private var horizontalGesture = false
+    private val touchSlop by lazy { ViewConfiguration.get(this).scaledTouchSlop }
+
     // The control bar is one view that changes parent: docked under the video
     // in windowed mode, overlaid on the video in fullscreen.
     private var controlsBar: View? = null
     private var volumeFlyoutRef: View? = null
+    private var flyoutMuteBtn: ImageView? = null
+    private var loadingBoxRef: View? = null
+    private var loadingTextRef: TextView? = null
     private var controlsVisible = true
 
     // In-app volume & playback speed state
@@ -123,24 +136,65 @@ class DetailActivity : BaseVaultActivity() {
         }
     }
 
-    private val hideVolumeFlyoutRunnable = Runnable {
-        volumeFlyoutRef?.visibility = View.GONE
+    // The volume icon in the controls row only opens and closes this flyout;
+    // muting lives inside it. It is parented to the video overlay because that is
+    // the one container large enough to draw it clear of the controls without
+    // being clipped by them.
+    private fun toggleVolumeFlyout() {
+        if (volumeFlyoutRef?.visibility == View.VISIBLE) {
+            hideVolumeFlyout()
+        } else {
+            showVolumeFlyout()
+        }
     }
 
-    // Tapping the volume icon raises the slider above the bar for a few
-    // seconds, then it gets out of the way again.
     private fun showVolumeFlyout() {
         val flyout = volumeFlyoutRef ?: return
+        (flyout.parent as? ViewGroup)?.removeView(flyout)
+        if (isFullscreen) {
+            // Fullscreen has no page below the video, so it floats over the bar.
+            val host = controlsOverlay ?: return
+            host.addView(flyout, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.END or Gravity.BOTTOM
+            ).apply {
+                bottomMargin = (controlsBar?.height ?: 0) + dp(8)
+                rightMargin = dp(4)
+            })
+        } else {
+            // Windowed: under the controls, clear of the video, so dragging the
+            // slider can never land on the swipe gesture.
+            val barIndex = controlsBar?.let { col.indexOfChild(it) } ?: -1
+            col.addView(
+                flyout,
+                if (barIndex >= 0) barIndex + 1 else col.childCount,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+            )
+        }
         flyout.visibility = View.VISIBLE
+        flyout.animate().cancel()
         flyout.alpha = 0f
         flyout.animate().alpha(1f).setDuration(140).start()
-        mainHandler.removeCallbacks(hideVolumeFlyoutRunnable)
-        mainHandler.postDelayed(hideVolumeFlyoutRunnable, 2600)
     }
 
     private fun hideVolumeFlyout() {
-        mainHandler.removeCallbacks(hideVolumeFlyoutRunnable)
-        volumeFlyoutRef?.visibility = View.GONE
+        val flyout = volumeFlyoutRef ?: return
+        flyout.animate().cancel()
+        flyout.visibility = View.GONE
+        (flyout.parent as? ViewGroup)?.removeView(flyout)
+    }
+
+    // One place to push the current volume into every control that displays it.
+    private fun syncVolumeUi() {
+        val eff = if (isMuted) 0f else appVol
+        volumeBar?.progress = (eff * 100).toInt()
+        val silent = eff == 0f
+        muteBtn?.setVolumeIcon(silent)
+        flyoutMuteBtn?.setVolumeIcon(silent)
     }
 
     private val updateProgressRunnable = object : Runnable {
@@ -370,9 +424,7 @@ class DetailActivity : BaseVaultActivity() {
         controlsBar?.visibility = View.VISIBLE
         controlsVisible = true
         playPauseBtn?.setPlayPauseIcon(videoView?.isPlaying == true)
-        val eff = if (isMuted) 0f else appVol
-        volumeBar?.progress = (eff * 100).toInt()
-        muteBtn?.setVolumeIcon(eff == 0f)
+        syncVolumeUi()
         resetAutoHide()
     }
 
@@ -888,6 +940,10 @@ class DetailActivity : BaseVaultActivity() {
         setImageResource(if (full) R.drawable.ic_collapse else R.drawable.ic_expand)
     }
 
+    private fun ImageView.setVolumeIcon(muted: Boolean) {
+        setImageResource(if (muted) R.drawable.ic_volume_off else R.drawable.ic_volume_up)
+    }
+
     private fun TextView.setVolumeIcon(muted: Boolean) {
         setCompoundDrawablesWithIntrinsicBounds(
             if (muted) R.drawable.ic_volume_off else R.drawable.ic_volume_up, 0, 0, 0
@@ -972,6 +1028,7 @@ class DetailActivity : BaseVaultActivity() {
     private fun setFullscreen(enable: Boolean) {
         if (isFullscreen == enable) return
         isFullscreen = enable
+        hideVolumeFlyout()
 
         if (enable) {
             item?.let { itm ->
@@ -1186,6 +1243,9 @@ class DetailActivity : BaseVaultActivity() {
         // detached here or each item would stack another one under the page.
         hideVolumeFlyout()
         volumeFlyoutRef = null
+        flyoutMuteBtn = null
+        loadingBoxRef = null
+        loadingTextRef = null
         (controlsBar?.parent as? ViewGroup)?.removeView(controlsBar)
         controlsBar = null
         playPauseBtn = null
@@ -1256,6 +1316,33 @@ class DetailActivity : BaseVaultActivity() {
             }
             seekNoticeBadge = seekBadge
             videoContainer.addView(seekBadge, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
+
+            // Without this the video area is just black for as long as the decrypt
+            // and the player's own prepare take, which reads as a hang.
+            val loadingBox = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                visibility = View.GONE
+            }
+            loadingBox.addView(ProgressBar(this).apply {
+                isIndeterminate = true
+                indeterminateTintList = ColorStateList.valueOf(prefs.accentColor())
+            }, LinearLayout.LayoutParams(dp(34), dp(34)))
+            val loadingText = TextView(this).apply {
+                text = "Decrypting…"
+                textSize = 12f
+                setTextColor(prefs.textColor())
+                gravity = Gravity.CENTER
+                setPadding(dp(12), dp(10), dp(12), dp(4))
+            }
+            loadingBox.addView(loadingText)
+            videoContainer.addView(loadingBox, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER
+            ))
+            loadingBoxRef = loadingBox
+            loadingTextRef = loadingText
 
             isMuted = prefs.alwaysStartMuted
             appVol = prefs.appVolume
@@ -1338,11 +1425,33 @@ class DetailActivity : BaseVaultActivity() {
                 1f
             ))
 
-            // 2. Minimalist Single-Line Controls Row
+            // 2. Single-line controls, spread across three equal cells: seek on
+            // the left, item navigation dead centre, volume and fullscreen on the
+            // right. Equal weights keep the middle group truly centred instead of
+            // drifting towards whichever end has the wider buttons.
             val controlsRow = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(4), dp(4), dp(4), 0)
+            }
+            val seekGroup = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.START or Gravity.CENTER_VERTICAL
+            }
+            val navGroup = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER
+            }
+            val rightGroup = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.END or Gravity.CENTER_VERTICAL
+            }
+            listOf(seekGroup, navGroup, rightGroup).forEach { group ->
+                controlsRow.addView(group, LinearLayout.LayoutParams(
+                    0,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    1f
+                ))
             }
 
             // Previous item. Kept compact and tucked against the play button so
@@ -1358,10 +1467,10 @@ class DetailActivity : BaseVaultActivity() {
                     resetAutoHide()
                 }
             }
-            controlsRow.addView(prevBtn, LinearLayout.LayoutParams(
+            navGroup.addView(prevBtn, LinearLayout.LayoutParams(
                 dp(30),
                 dp(30)
-            ).apply { rightMargin = dp(4) })
+            ).apply { rightMargin = dp(8) })
 
             // Play / Pause
             val playBtn = TextView(this).apply {
@@ -1386,10 +1495,10 @@ class DetailActivity : BaseVaultActivity() {
                 }
             }
             playPauseBtn = playBtn
-            controlsRow.addView(playBtn, LinearLayout.LayoutParams(
+            navGroup.addView(playBtn, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { rightMargin = dp(4) })
+            ).apply { rightMargin = dp(8) })
 
             // Next item
             val nextBtn = ImageView(this).apply {
@@ -1403,10 +1512,10 @@ class DetailActivity : BaseVaultActivity() {
                     resetAutoHide()
                 }
             }
-            controlsRow.addView(nextBtn, LinearLayout.LayoutParams(
+            navGroup.addView(nextBtn, LinearLayout.LayoutParams(
                 dp(30),
                 dp(30)
-            ).apply { rightMargin = dp(10) })
+            ))
 
             // Rewind 10s
             val rewindBtn = TextView(this).apply {
@@ -1423,10 +1532,10 @@ class DetailActivity : BaseVaultActivity() {
             // narrowest screens drop them rather than clip the fullscreen button.
             val roomForSeekChips = resources.configuration.screenWidthDp >= 340
             if (roomForSeekChips) {
-                controlsRow.addView(rewindBtn, LinearLayout.LayoutParams(
+                seekGroup.addView(rewindBtn, LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { rightMargin = dp(6) })
+                ).apply { rightMargin = dp(8) })
             }
 
             // Forward 10s
@@ -1441,10 +1550,10 @@ class DetailActivity : BaseVaultActivity() {
                 setOnClickListener { safeSeekForward() }
             }
             if (roomForSeekChips) {
-                controlsRow.addView(fwdBtn, LinearLayout.LayoutParams(
+                seekGroup.addView(fwdBtn, LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { rightMargin = dp(8) })
+                ))
             }
 
             // Timestamp (00:00 / 00:00), parked beside the seekbar so it always
@@ -1496,57 +1605,69 @@ class DetailActivity : BaseVaultActivity() {
                         }
                         val eff = if (isMuted) 0f else appVol
                         try { currentMediaPlayer?.setVolume(eff, eff) } catch (_: Exception) {}
-                        mute.setVolumeIcon(eff == 0f)
+                        syncVolumeUi()
                         resetAutoHide()
                     }
                 }
-                override fun onStartTrackingTouch(sb: SeekBar?) {
-                    mainHandler.removeCallbacks(hideVolumeFlyoutRunnable)
-                    resetAutoHide()
-                }
-                override fun onStopTrackingTouch(sb: SeekBar?) {
-                    mainHandler.postDelayed(hideVolumeFlyoutRunnable, 2600)
-                    resetAutoHide()
-                }
+                override fun onStartTrackingTouch(sb: SeekBar?) { resetAutoHide() }
+                override fun onStopTrackingTouch(sb: SeekBar?) { resetAutoHide() }
             })
 
+            // The row's volume icon only opens and closes the flyout, so a tap
+            // meant to adjust the level can't silently mute playback.
             mute.setOnClickListener {
-                isMuted = !isMuted
-                if (!isMuted && appVol <= 0.05f) {
-                    appVol = 0.8f
-                    prefs.appVolume = 0.8f
-                }
-                val eff = if (isMuted) 0f else appVol
-                try { currentMediaPlayer?.setVolume(eff, eff) } catch (_: Exception) {}
-                vBar.progress = (eff * 100).toInt()
-                mute.setVolumeIcon(eff == 0f)
                 ThemeUtils.vibrateTick(mute)
-                showVolumeFlyout()
+                toggleVolumeFlyout()
                 resetAutoHide()
             }
-            controlsRow.addView(mute)
+            rightGroup.addView(mute)
 
             // The slider itself floats above the bar on demand, so the row keeps
             // only the icon and the timestamp keeps its full width.
-            val volumeFlyout = FrameLayout(this).apply {
+            val volumeFlyout = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER
                 background = roundedBg(0xF21A1A1E.toInt(), dp(14).toFloat())
                 elevation = dp(6).toFloat()
-                setPadding(dp(10), dp(2), dp(10), dp(2))
+                setPadding(dp(10), dp(4), dp(10), dp(4))
                 visibility = View.GONE
+                // Swallow every touch in the panel. In fullscreen it sits over the
+                // video, and a drag that reached the gesture detector would be
+                // read as a swipe and change item mid-adjustment.
+                setOnTouchListener { _, _ -> true }
             }
-            volumeFlyout.addView(vBar, FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT
+
+            // Muting moved in here, next to the level it affects.
+            val flyoutMute = ImageView(this).apply {
+                scaleType = ImageView.ScaleType.CENTER_INSIDE
+                background = ThemeUtils.surfaceGlass(prefs, 10f, 1)
+                setPadding(dp(7), dp(7), dp(7), dp(7))
+                setVolumeIcon(isMuted || appVol == 0f)
+                contentDescription = "Mute"
+                setOnClickListener {
+                    isMuted = !isMuted
+                    if (!isMuted && appVol <= 0.05f) {
+                        appVol = 0.8f
+                        prefs.appVolume = 0.8f
+                    }
+                    val eff = if (isMuted) 0f else appVol
+                    try { currentMediaPlayer?.setVolume(eff, eff) } catch (_: Exception) {}
+                    syncVolumeUi()
+                    ThemeUtils.vibrateTick(this@apply)
+                    resetAutoHide()
+                }
+            }
+            flyoutMuteBtn = flyoutMute
+            volumeFlyout.addView(flyoutMute, LinearLayout.LayoutParams(dp(32), dp(32)).apply {
+                rightMargin = dp(8)
+            })
+            volumeFlyout.addView(vBar, LinearLayout.LayoutParams(
+                dp(140),
+                LinearLayout.LayoutParams.WRAP_CONTENT
             ))
             volumeFlyoutRef = volumeFlyout
-            bottomController.addView(volumeFlyout, FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.END or Gravity.BOTTOM
-            ).apply {
-                bottomMargin = dp(46)
-                rightMargin = dp(2)
-            })
+            // Not attached here: the bar clips anything hanging above its own
+            // bounds, so the flyout is parented to the video overlay on demand.
 
             // Fullscreen toggle button
             val fsBtn = ImageView(this).apply {
@@ -1562,10 +1683,10 @@ class DetailActivity : BaseVaultActivity() {
                 }
             }
             fsToggleBtn = fsBtn
-            controlsRow.addView(fsBtn, LinearLayout.LayoutParams(
+            rightGroup.addView(fsBtn, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { leftMargin = dp(6) })
+            ).apply { leftMargin = dp(10) })
 
             barContent.addView(controlsRow)
 
@@ -1636,7 +1757,34 @@ class DetailActivity : BaseVaultActivity() {
                 }
             })
 
-            val touchListener = View.OnTouchListener { _, event ->
+            val touchListener = View.OnTouchListener { v, event ->
+                // The page lives in a ScrollView. A swipe that is mostly
+                // horizontal but tilted slightly would otherwise be claimed by the
+                // ScrollView, which scrolls the media up the screen instead of
+                // changing item. Claim the gesture as soon as it reads as
+                // horizontal; vertical drags are left alone so the page still
+                // scrolls when that is what was meant.
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        gestureStartX = event.rawX
+                        gestureStartY = event.rawY
+                        horizontalGesture = false
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        if (!horizontalGesture) {
+                            val dx = abs(event.rawX - gestureStartX)
+                            val dy = abs(event.rawY - gestureStartY)
+                            if (dx > touchSlop && dx > dy * 1.2f) {
+                                horizontalGesture = true
+                                v.parent?.requestDisallowInterceptTouchEvent(true)
+                            }
+                        }
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        horizontalGesture = false
+                        v.parent?.requestDisallowInterceptTouchEvent(false)
+                    }
+                }
                 if (event.action == MotionEvent.ACTION_UP || event.action == MotionEvent.ACTION_CANCEL) {
                     if (isHolding2x) {
                         isHolding2x = false
@@ -1659,6 +1807,9 @@ class DetailActivity : BaseVaultActivity() {
 
             mediaBox.addView(videoContainer)
 
+            loadingBoxRef?.visibility = View.VISIBLE
+            loadingTextRef?.text = "Decrypting…"
+
             val currentJobId = activePlaySessionId
             val startVaultSession = VaultLock.sessionId
             bg.execute {
@@ -1677,12 +1828,14 @@ class DetailActivity : BaseVaultActivity() {
                             cleanPlayFile()
                             return@post
                         }
+                        loadingTextRef?.text = "Loading…"
                         vv.setOnPreparedListener { mp ->
                             if (isTornDown || isFinishing || isDestroyed || activePlaySessionId != currentJobId || VaultLock.sessionId != startVaultSession) {
                                 cleanPlayFile()
                                 return@setOnPreparedListener
                             }
                             currentMediaPlayer = mp
+                            loadingBoxRef?.visibility = View.GONE
                             if (mp.videoWidth > 0 && mp.videoHeight > 0) {
                                 updateMediaContainerHeight(mp.videoWidth, mp.videoHeight)
                             }
@@ -1705,6 +1858,7 @@ class DetailActivity : BaseVaultActivity() {
                             }
                         }
                         vv.setOnErrorListener { _, _, _ ->
+                            loadingBoxRef?.visibility = View.GONE
                             if (isTornDown || isFinishing || isDestroyed || VaultLock.sessionId != startVaultSession) return@setOnErrorListener true
                             try {
                                 vv.seekTo(0)
@@ -1724,6 +1878,7 @@ class DetailActivity : BaseVaultActivity() {
                     }
                 } catch (e: Exception) {
                     mainHandler.post {
+                        loadingBoxRef?.visibility = View.GONE
                         if (!isFinishing && !isDestroyed) {
                             toast("Failed to decrypt video: ${e.message}")
                         }

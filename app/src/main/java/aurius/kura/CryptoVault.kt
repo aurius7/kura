@@ -147,7 +147,10 @@ class CryptoVault(ctx: Context) {
             try {
                 encFile(name).openFileInput().use { inp ->
                     out.outputStream().use { o ->
-                        inp.copyTo(o)
+                        // 256 KiB per pass. The default 8 KiB copy buffer turns a
+                        // large video into tens of thousands of read/write pairs,
+                        // and this copy is the whole wait before the first frame.
+                        inp.copyTo(o, 256 * 1024)
                     }
                 }
                 return out
