@@ -153,10 +153,11 @@ addresses, and the ones it does not.
 
 Honest list of things that are weaker than they could be.
 
-- **Backup key derivation is PBKDF2-HMAC-SHA256 at 100,000 iterations.** Fine
+- **Backup key derivation is PBKDF2-HMAC-SHA256 at 120,000 iterations.** Fine
   against casual attack, below current guidance for offline passphrase
-  cracking, where a memory-hard KDF is the usual recommendation. New archives
-  can move to Argon2id while old ones stay readable.
+  cracking, where a memory-hard KDF is the usual recommendation. Archives written
+  by earlier releases used 100,000 iterations and still restore; new archives can
+  move to Argon2id while old ones stay readable.
 - **Restore rolls back, but per-entry failures are tolerated.** An archive is
   fully decrypted and authenticated before anything is committed, and a restore
   that is cancelled, cut short by a lock, or turns out to be truncated partway
@@ -180,9 +181,12 @@ Honest list of things that are weaker than they could be.
 
 ## Building
 
-Kura targets `compileSdk 34`, `minSdk 26`, and builds with **JDK 17**, Kotlin
-1.9.22, and the Gradle version pinned in the wrapper (**8.5**). AGP 8.3 will not
-run on an older JDK.
+Kura targets `compileSdk` / `targetSdk 36` (Android 16), `minSdk 26`, and builds
+with **JDK 17**, Kotlin 1.9.22, and the Gradle version pinned in the wrapper
+(**8.11.1**) with AGP **8.9.2**. AGP 8.9 will not run on an older JDK.
+
+`targetSdk 36` means Android 16's enforced edge-to-edge applies: every screen draws
+its own insets, so there is no reliance on the system fitting the window for you.
 
 The Gradle wrapper is checked in, so the build uses a known Gradle rather than
 whatever is on your `PATH`. `gradle-wrapper.properties` also pins the
@@ -247,7 +251,7 @@ APK will differ and only the signing certificate above will match.
 ## Tests
 
 ```bash
-gradle testReleaseUnitTest
+./gradlew testReleaseUnitTest
 ```
 
 Covers tag normalization and search-variant generation, plus authenticated
