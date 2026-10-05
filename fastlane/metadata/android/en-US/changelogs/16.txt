@@ -1,0 +1,10 @@
+Kura now targets Android 16, and changing a setting no longer locks the vault.
+
+With an immediate auto-lock, toggling any setting rebuilt the screen and the
+rebuild was mistaken for the app being backgrounded, so the vault locked and
+returned you to the lock screen. Settings now keep both the vault open and your
+place on the page.
+
+Media is centred on screen with the tags directly beneath it, video playback
+retries a decrypt that lost a race with cache cleanup, and the fullscreen
+control is an icon that no longer disappears on narrow screens.
